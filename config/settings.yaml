@@ -1,0 +1,31 @@
+timeframes:
+- 1d
+
+alert_conditions:
+  require_price_impulse: true
+  require_oi_impulse: true
+  require_first_impulse: true
+  require_volume_confirmation: false
+  require_breakout_20: false
+  require_sma200_reclaim: false
+  allowed_funding_classes:
+  - NEGATIVE
+  - NEUTRAL
+  - POSITIVE
+  - HOT
+
+thresholds:
+  lookback_stats: 100
+  lookback_no_previous_signal: 10
+  price_zscore_threshold: 2.5
+  oi_zscore_threshold: 2.5
+  volume_zscore_threshold: 1.5
+  close_position_min: 0.65
+  funding_hot_threshold: 0.0005
+  funding_extreme_percentile: 95
+  max_recent_price_run_pct: 0.45
+  max_consecutive_oi_expansion: 3
+
+storage:
+  sqlite_path: data/signals.sqlite
+  alerts_csv: data/alerts.csv
