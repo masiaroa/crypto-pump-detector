@@ -1,22 +1,144 @@
 from __future__ import annotations
 
+import time
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
+import streamlit.components.v1 as components
 
 from pump_detector.config import ROOT, load_settings, load_watchlist
 from pump_detector.scanner import scan_watchlist
 from pump_detector.storage import read_recent_alerts
 
 
-st.set_page_config(page_title="Crypto Pump Detector", layout="wide")
+CACHE_TTL_SECONDS = 2 * 60 * 60  # 2 hours
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+def _cached_scan_overview(symbols_tuple: tuple[str, ...], timeframe: str, persist: bool, limit: int, _settings_dict: dict, _ts: int):
+    """Cached overview scan. _ts is a cache-buster key (epoch // TTL)."""
+    from pump_detector.config import Settings
+    s = Settings(
+        timeframes=[timeframe],
+        alert_conditions=_settings_dict["alert_conditions"],
+        thresholds=_settings_dict["thresholds"],
+        storage=_settings_dict["storage"],
+    )
+    return scan_watchlist(symbols=list(symbols_tuple), settings=s, persist=persist, limit=limit)
+
+
+def _cache_ts() -> int:
+    """Return a time bucket so the cache auto-expires every TTL window."""
+    return int(time.time()) // CACHE_TTL_SECONDS
+
+
+st.set_page_config(
+    page_title="Crypto Pump Detector",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+# ---------------------------------------------------------------------------
+# Global CSS: disable Ctrl+C "Clear caches" dialog, mobile-friendly layout,
+# collapsible sidebar helpers
+# ---------------------------------------------------------------------------
+st.markdown(
+    """
+    <style>
+    /* ---- Hide Streamlit "Clear caches" dialog triggered by Ctrl+C ---- */
+    div[data-testid="stClearCacheDialog"],
+    div[data-testid="stModal"],
+    div[role="dialog"] {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+    }
+    /* Also hide the modal overlay/backdrop */
+    div[data-testid="stModalOverlay"],
+    .stModal {
+        display: none !important;
+    }
+
+    /* ---- Mobile responsive: stack columns vertically ---- */
+    @media (max-width: 768px) {
+        div[data-testid="stHorizontalBlock"] {
+            flex-wrap: wrap !important;
+        }
+        div[data-testid="stHorizontalBlock"] > div {
+            flex: 1 1 100% !important;
+            min-width: 100% !important;
+        }
+        .js-plotly-plot .plotly .main-svg {
+            width: 100% !important;
+        }
+        .block-container {
+            padding-left: 0.5rem !important;
+            padding-right: 0.5rem !important;
+        }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# Inject JS via components.html to intercept Ctrl+C shortcut that triggers
+# Streamlit's "Clear caches" dialog. This actually executes (unlike st.markdown
+# <script> which Streamlit strips). Height=0 makes the iframe invisible.
+components.html(
+    """
+    <script>
+    // Access the parent Streamlit document from the iframe
+    const parentDoc = window.parent.document;
+
+    // Intercept keydown on the parent document to block Streamlit's handler
+    parentDoc.addEventListener('keydown', function(e) {
+        // Streamlit triggers "Clear caches" on Ctrl+C (or Cmd+C on Mac)
+        // when there's no text selection. We block propagation to Streamlit
+        // only when nothing is selected (pure Ctrl+C without copy intent).
+        if ((e.ctrlKey || e.metaKey) && e.key === 'c' && !e.shiftKey) {
+            const selection = parentDoc.getSelection();
+            if (!selection || selection.toString().trim() === '') {
+                e.stopPropagation();
+                e.preventDefault();
+            }
+        }
+        // Also block Ctrl+Shift+C entirely
+        if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'C') {
+            e.stopPropagation();
+            e.preventDefault();
+        }
+    }, true);  // useCapture=true to run before Streamlit's handlers
+
+    // Also close any existing modal that may already be open
+    const observer = new MutationObserver(function(mutations) {
+        for (const m of mutations) {
+            for (const node of m.addedNodes) {
+                if (node.nodeType === 1) {
+                    const dialog = node.querySelector && node.querySelector('[role="dialog"], [data-testid="stModal"]');
+                    if (dialog) {
+                        dialog.style.display = 'none';
+                        // Try to find and click the close/cancel button
+                        const closeBtn = dialog.querySelector('button[aria-label="Close"], button:last-child');
+                        if (closeBtn) closeBtn.click();
+                    }
+                }
+            }
+        }
+    });
+    observer.observe(parentDoc.body, { childList: true, subtree: true });
+    </script>
+    """,
+    height=0,
+)
 
 
 def main() -> None:
-    st.title("Crypto Perp Pump Detector")
+    st.image("data/img/title.png", width=480)
     st.caption("Scanner de inicio de pump apalancado. Las senales usan solo datos disponibles al cierre de cada vela.")
 
     settings = load_settings()
@@ -27,26 +149,38 @@ def main() -> None:
         st.session_state.selected_timeframe = "1d"
     if "view_mode" not in st.session_state:
         st.session_state.view_mode = "detail"
+    if "overview_tf" not in st.session_state:
+        st.session_state.overview_tf = "1d"
 
     with st.sidebar:
         st.header("Watchlist")
-        if st.button("Overview", key="watch-overview", use_container_width=True):
+        if st.button("📊 Overview", key="watch-overview", use_container_width=True):
             st.session_state.view_mode = "overview"
             st.session_state.pop("scan_result", None)
             st.session_state.pop("selected_market", None)
         _watchlist_buttons(symbols)
         st.divider()
-
-        st.header("Scan")
-        selected_timeframes = st.multiselect("Timeframes", settings.timeframes, default=settings.timeframes)
-        symbol_filter = st.text_input("Filtrar simbolo", value="")
-        limit = st.slider("Candles", min_value=120, max_value=500, value=260, step=20)
-        persist = st.checkbox("Guardar snapshots y alertas", value=True)
-        run_selected = st.button("Actualizar seleccionado", type="primary", use_container_width=True)
-        run_all = st.button("Actualizar toda la watchlist", use_container_width=True)
-        st.divider()
         st.write(f"{len(symbols)} simbolos en watchlist")
-        st.caption("La izquierda usa simbolos limpios; el exchange aparece solo en el detalle.")
+
+    # ---- Scan settings in a collapsible expander on main area ----
+    with st.expander("⚙️ Ajustes de escaneo", expanded=False):
+        sc1, sc2, sc3 = st.columns(3)
+        with sc1:
+            selected_timeframes = st.multiselect("Timeframes", ["1h", "4h", "1d"], default=settings.timeframes)
+            symbol_filter = st.text_input("Filtrar simbolo", value="")
+        with sc2:
+            limit = st.slider("Candles", min_value=120, max_value=500, value=260, step=20)
+            persist = st.checkbox("Guardar snapshots y alertas", value=True)
+        with sc3:
+            run_selected = st.button("Actualizar seleccionado", type="primary", use_container_width=True)
+            run_all = st.button("Actualizar toda la watchlist", use_container_width=True)
+            force_refresh = st.button("🔄 Forzar refresco (borrar caché)", use_container_width=True)
+
+    # Force cache clear
+    if force_refresh:
+        _cached_scan_overview.clear()
+        st.session_state.pop("scan_result", None)
+        st.toast("Caché borrada. Reescaneando...", icon="🔄")
 
     pending_tf = st.session_state.pop("pending_timeframe", None)
     if pending_tf:
@@ -56,15 +190,33 @@ def main() -> None:
     selected_symbol = st.session_state.selected_symbol
     selected_timeframe = st.session_state.selected_timeframe
     needs_initial_scan = "scan_result" not in st.session_state
-    if st.session_state.view_mode == "overview" and (needs_initial_scan or run_all):
-        active_settings = settings.__class__(
-            timeframes=selected_timeframes or settings.timeframes,
-            alert_conditions=settings.alert_conditions,
-            thresholds=settings.thresholds,
-            storage=settings.storage,
-        )
-        with st.spinner("Escaneando overview..."):
-            st.session_state.scan_result = scan_watchlist(symbols=symbols, settings=active_settings, persist=persist, limit=limit)
+
+    settings_dict = {
+        "alert_conditions": settings.alert_conditions,
+        "thresholds": settings.thresholds,
+        "storage": settings.storage,
+    }
+
+    if run_all or force_refresh:
+        st.session_state.view_mode = "overview"
+        overview_tf = st.session_state.get("overview_tf", "1d")
+        if force_refresh:
+            ts = int(time.time()) // 1
+        else:
+            ts = _cache_ts()
+        with st.spinner("Escaneando watchlist..."):
+            st.session_state.scan_result = _cached_scan_overview(
+                tuple(symbols), overview_tf, persist, limit, settings_dict, ts
+            )
+        st.session_state.overview_last_refresh = datetime.now()
+    elif st.session_state.view_mode == "overview" and needs_initial_scan:
+        overview_tf = st.session_state.get("overview_tf", "1d")
+        with st.spinner("Escaneando overview (cacheado 2h)..."):
+            st.session_state.scan_result = _cached_scan_overview(
+                tuple(symbols), overview_tf, persist, limit, settings_dict, _cache_ts()
+            )
+        if "overview_last_refresh" not in st.session_state:
+            st.session_state.overview_last_refresh = datetime.now()
     elif needs_initial_scan or run_selected:
         active_settings = settings.__class__(
             timeframes=[selected_timeframe],
@@ -75,16 +227,6 @@ def main() -> None:
         with st.spinner(f"Actualizando {_coin_label(selected_symbol)}..."):
             st.session_state.scan_result = scan_watchlist(symbols=[selected_symbol], settings=active_settings, persist=False, limit=limit)
 
-    if run_all:
-        st.session_state.view_mode = "overview"
-        active_settings = settings.__class__(
-            timeframes=selected_timeframes or settings.timeframes,
-            alert_conditions=settings.alert_conditions,
-            thresholds=settings.thresholds,
-            storage=settings.storage,
-        )
-        with st.spinner("Escaneando watchlist..."):
-            st.session_state.scan_result = scan_watchlist(symbols=symbols, settings=active_settings, persist=persist, limit=limit)
 
     df, details = st.session_state.scan_result
     df = df.copy()
@@ -104,24 +246,105 @@ def main() -> None:
         selected_key = available[0]
     symbol, timeframe = selected_key.split(" | ", 1)
     _detail(symbol, timeframe, df, details)
-    _alerts(settings)
 
 
+# ---------------------------------------------------------------------------
+# Overview
+# ---------------------------------------------------------------------------
 def _overview(df, details, symbol_filter: str, sort_by_default: str = "early_bullish_score") -> None:
-    st.subheader("Overview")
-    sort_options = [
-        "early_bullish_score",
-        "blowoff_risk_score",
-        "oi_change_pct",
-        "price_return_zscore",
-        "funding_rate",
-        "volume_zscore",
-    ]
-    sort_by = st.selectbox(
-        "Ordenar por",
-        sort_options,
-        index=sort_options.index(sort_by_default),
-    )
+    # ---- Header: title + last refresh info + force refresh button ----
+    hdr_left, hdr_right = st.columns([0.7, 0.3])
+    with hdr_left:
+        st.subheader("Overview")
+        last_refresh = st.session_state.get("overview_last_refresh")
+        if last_refresh:
+            elapsed = datetime.now() - last_refresh
+            mins = int(elapsed.total_seconds() // 60)
+            if mins < 1:
+                ago = "hace unos segundos"
+            elif mins < 60:
+                ago = f"hace {mins} min"
+            else:
+                ago = f"hace {mins // 60}h {mins % 60}min"
+            st.caption(f"📅 Última actualización: {last_refresh.strftime('%H:%M:%S')} ({ago})")
+    with hdr_right:
+        if st.button("🔄 Refrescar overview", use_container_width=True, key="force_refresh_overview"):
+            _cached_scan_overview.clear()
+            st.session_state.pop("scan_result", None)
+            st.rerun()
+
+    # ---- Timeframe selector for overview ----
+    col_tf, col_sort = st.columns([0.3, 0.7])
+    with col_tf:
+        new_tf = st.segmented_control(
+            "Timeframe",
+            options=["4h", "1d"],
+            selection_mode="single",
+            default=st.session_state.get("overview_tf", "1d"),
+            key="overview_tf_ctrl",
+        )
+        if new_tf and new_tf != st.session_state.get("overview_tf"):
+            st.session_state.overview_tf = new_tf
+            st.session_state.pop("scan_result", None)
+            st.rerun()
+
+    with col_sort:
+        sort_options = [
+            "early_bullish_score",
+            "blowoff_risk_score",
+            "oi_change_pct",
+            "price_return_zscore",
+            "funding_rate",
+        ]
+        sort_by = st.selectbox("Ordenar por", sort_options, index=sort_options.index(sort_by_default))
+
+    # ---- 1. Eventos recientes (arriba) ----
+    history = _event_history(details)
+    st.subheader("🔔 Eventos recientes")
+    if history.empty:
+        st.info("No hay PRE_ENTRY, HOT_PRE_ENTRY o ENTRY recientes en el scan actual.")
+    else:
+        # Add raw symbol column for navigation lookup
+        history["_raw_symbol"] = history["raw_symbol"]
+        event_cols = [
+            "event_type",
+            "timestamp",
+            "symbol",
+            "timeframe",
+            "close",
+            "early_bullish_score",
+            "blowoff_risk_score",
+            "funding_classification",
+        ]
+        display_history = history[event_cols].copy()
+        st.caption("👆 Selecciona una fila para ir al detalle")
+        ev_event = st.dataframe(
+            display_history,
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            key="event_history_table",
+        )
+        # Navigate to detail on row selection
+        try:
+            ev_rows = ev_event.selection.rows
+        except AttributeError:
+            ev_rows = []
+        if ev_rows:
+            clicked = history.iloc[ev_rows[0]]
+            st.session_state.selected_symbol = clicked["_raw_symbol"]
+            st.session_state.selected_timeframe = clicked["timeframe"]
+            st.session_state.view_mode = "detail"
+            st.session_state.pop("scan_result", None)
+            st.rerun()
+
+        history_path = Path(ROOT / "data" / "event_history.csv")
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+        history.drop(columns=["_raw_symbol"], errors="ignore").to_csv(history_path, index=False)
+
+    # ---- 2. Tabla principal (abajo) ----
+    st.subheader("📋 Tabla de mercados")
     table = df.sort_values(sort_by, ascending=False)
     if symbol_filter.strip():
         needle = symbol_filter.strip()
@@ -135,22 +358,46 @@ def _overview(df, details, symbol_filter: str, sort_by_default: str = "early_bul
         "timeframe",
         "close",
         "price_return_pct",
-        "oi",
         "oi_change_pct",
-        "oi_change_zscore",
-        "funding_rate",
         "funding_classification",
-        "volume_zscore",
-        "breakout_20_flag",
-        "sma200_reclaim_flag",
         "early_bullish_score",
         "blowoff_risk_score",
         "signal_active",
-        "last_signal_time",
-        "notes",
     ]
+
+    # Build styled DataFrame with red gradient on early_bullish_score
+    display_table = table[visible_columns].copy()
+    display_table = display_table.reset_index(drop=True)
+
+    def _style_overview(styler):
+        """Apply white-to-red gradient based on early_bullish_score."""
+        scores = styler.data["early_bullish_score"]
+        max_score = max(scores.max(), 1)  # avoid div by zero
+
+        def _row_bg(row):
+            score = row["early_bullish_score"]
+            intensity = min(score / max_score, 1.0)
+            # White (255,255,255) -> Soft red (217,79,79) interpolation
+            r = int(255 - (255 - 217) * intensity)
+            g = int(255 - (255 - 120) * intensity)
+            b = int(255 - (255 - 120) * intensity)
+            bg = f"background-color: rgba({r},{g},{b},0.35)"
+            return [bg] * len(row)
+
+        return styler.apply(_row_bg, axis=1)
+
+    styled = display_table.style.pipe(_style_overview)
+    styled = styled.format({
+        "close": "{:.6g}",
+        "price_return_pct": "{:.2f}%",
+        "oi_change_pct": "{:.2f}%",
+        "early_bullish_score": "{:.1f}",
+        "blowoff_risk_score": "{:.1f}",
+    })
+
+    st.caption("👆 Selecciona una fila para ir al detalle")
     event = st.dataframe(
-        table[visible_columns],
+        styled,
         use_container_width=True,
         hide_index=True,
         on_select="rerun",
@@ -158,32 +405,27 @@ def _overview(df, details, symbol_filter: str, sort_by_default: str = "early_bul
         key="dashboard_table",
         column_config={
             "coin": "Symbol",
-            "price_return_pct": st.column_config.NumberColumn("Price candle %", format="%.2f%%"),
-            "oi_change_pct": st.column_config.NumberColumn("OI change %", format="%.2f%%"),
-            "funding_rate": st.column_config.NumberColumn("Funding", format="%.4f"),
+            "price_return_pct": st.column_config.NumberColumn("Price %"),
+            "oi_change_pct": st.column_config.NumberColumn("OI %"),
             "signal_active": st.column_config.CheckboxColumn("Signal"),
+            "funding_classification": "Funding",
+            "early_bullish_score": "Bullish",
+            "blowoff_risk_score": "Risk",
         },
     )
 
-    available = [f"{row.symbol} | {row.timeframe}" for row in table.itertuples()]
-    selected = _selected_symbol(event, table, available)
-    if selected and st.button("Abrir detalle seleccionado", type="primary"):
-        symbol, timeframe = selected.split(" | ", 1)
-        st.session_state.selected_symbol = symbol
-        st.session_state.selected_timeframe = timeframe
+    # Navigate to detail on row selection
+    try:
+        rows = event.selection.rows
+    except AttributeError:
+        rows = []
+    if rows:
+        row = table.iloc[rows[0]]
+        st.session_state.selected_symbol = row["symbol"]
+        st.session_state.selected_timeframe = row["timeframe"]
         st.session_state.view_mode = "detail"
         st.session_state.pop("scan_result", None)
         st.rerun()
-
-    history = _event_history(details)
-    st.subheader("Eventos recientes")
-    if history.empty:
-        st.info("No hay PRE_ENTRY, HOT_PRE_ENTRY o ENTRY recientes en el scan actual.")
-    else:
-        st.dataframe(history, use_container_width=True, hide_index=True)
-        history_path = Path(ROOT / "data" / "event_history.csv")
-        history_path.parent.mkdir(parents=True, exist_ok=True)
-        history.to_csv(history_path, index=False)
 
 
 def _alerts(settings) -> None:
@@ -353,59 +595,6 @@ def _detail(symbol: str, timeframe: str, df, details) -> None:
     fig.update_layout(height=780, xaxis_rangeslider_visible=False, margin=dict(l=20, r=20, t=50, b=20))
     st.plotly_chart(fig, use_container_width=True)
 
-    left, right = st.columns([0.55, 0.45])
-    with left:
-        st.markdown("**Eventos historicos detectados**")
-        signal_table = candles[(candles["signal_active_flag"] == True) | (candles["pre_alert_flag"] == True)].copy()  # noqa: E712
-        if signal_table.empty:
-            st.info("No hay eventos historicos ni pre-alertas con la configuracion actual.")
-        else:
-            signal_table["event_type"] = signal_table.apply(_event_type, axis=1)
-            st.dataframe(
-                signal_table[
-                    [
-                        "event_type",
-                        "timestamp",
-                        "close",
-                        "price_return_pct",
-                        "price_return_zscore",
-                        "oi_change_pct",
-                        "oi_change_zscore",
-                        "funding_rate",
-                        "funding_classification",
-                        "volume_zscore",
-                        "volume_ratio",
-                        "breakout_20_flag",
-                        "sma200_reclaim_flag",
-                        "early_bullish_score",
-                        "blowoff_risk_score",
-                    ]
-                ].sort_values("timestamp", ascending=False),
-                use_container_width=True,
-                hide_index=True,
-            )
-    with right:
-        st.markdown("**Ultimas velas con impulso parcial**")
-        if impulses.empty:
-            st.info("Sin impulsos parciales recientes.")
-        else:
-            st.dataframe(
-                impulses[
-                    [
-                        "timestamp",
-                        "price_impulse_flag",
-                        "oi_impulse_flag",
-                        "first_impulse_flag",
-                        "price_return_zscore",
-                        "oi_change_zscore",
-                        "funding_classification",
-                        "early_bullish_score",
-                        "blowoff_risk_score",
-                    ]
-                ].sort_values("timestamp", ascending=False),
-                use_container_width=True,
-                hide_index=True,
-            )
 
 
 def _event_history(details, days: int = 21):
@@ -424,6 +613,7 @@ def _event_history(details, days: int = 21):
                     "event_type": _event_type(row._asdict()),
                     "timestamp": row.timestamp,
                     "symbol": _coin_label(symbol),
+                    "raw_symbol": symbol,
                     "timeframe": timeframe,
                     "close": row.close,
                     "price_return_pct": row.price_return_pct,
@@ -450,7 +640,7 @@ def _event_type(row) -> str:
 
 
 def _add_oi_candles(fig, candles, timeframe: str) -> None:
-    width_ms = {"1h": 45 * 60 * 1000, "4h": 3.1 * 60 * 60 * 1000, "1d": 18 * 60 * 60 * 1000}[timeframe]
+    width_ms = {"1h": 45 * 60 * 1000, "4h": 3.1 * 60 * 60 * 1000, "1d": 18 * 60 * 60 * 1000}.get(timeframe, 18 * 60 * 60 * 1000)
     up = candles["oi_close"] >= candles["oi_open"]
     colors = up.map({True: "#0f766e", False: "#ef4444"})
     wick_x = []
@@ -523,6 +713,7 @@ def _watchlist_buttons(symbols: list[str]) -> None:
         if st.button(coin, key=f"watch-{symbol}", use_container_width=True):
             st.session_state.selected_symbol = symbol
             st.session_state.selected_timeframe = "1d"
+            st.session_state.view_mode = "detail"
             st.session_state.pop("scan_result", None)
             st.session_state.pop("selected_market", None)
 
