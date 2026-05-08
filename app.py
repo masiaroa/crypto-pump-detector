@@ -448,6 +448,24 @@ def _summary_metrics(df) -> None:
     col4.metric("Mercados", df["symbol"].nunique())
 
 
+def _safe_filter(candles, col: str):
+    """Return rows where *col* is truthy; return empty DF if column missing."""
+    if col not in candles.columns:
+        return candles.iloc[0:0]
+    return candles[candles[col].astype(bool)]
+
+
+def _safe_filter_or(candles, *cols: str):
+    """Return rows where ANY of *cols* is truthy; missing columns are ignored."""
+    mask = False
+    for c in cols:
+        if c in candles.columns:
+            mask = mask | candles[c].astype(bool)
+    if isinstance(mask, bool):
+        return candles.iloc[0:0]
+    return candles[mask]
+
+
 def _detail(symbol: str, timeframe: str, df, details) -> None:
     row = df[(df["symbol"] == symbol) & (df["timeframe"] == timeframe)].iloc[0]
     title_col, tf_col = st.columns([0.72, 0.28])
@@ -480,12 +498,11 @@ def _detail(symbol: str, timeframe: str, df, details) -> None:
         st.warning("No hay serie historica disponible para este simbolo/timeframe.")
         return
 
-    events = candles[candles["signal_active_flag"] == True].copy() if "signal_active_flag" in candles else candles.iloc[0:0].copy()  # noqa: E712
-    pre_alerts = candles[candles["pre_alert_flag"] == True].copy() if "pre_alert_flag" in candles else candles.iloc[0:0].copy()  # noqa: E712
-    hot_pre_alerts = candles[candles.get("hot_pre_entry_flag", False) == True].copy() if "hot_pre_entry_flag" in candles else candles.iloc[0:0].copy()  # noqa: E712
-    impulses = candles[
-        (candles.get("price_impulse_flag", False) == True) | (candles.get("oi_impulse_flag", False) == True)  # noqa: E712
-    ].tail(12)
+
+    events = _safe_filter(candles, "signal_active_flag")
+    pre_alerts = _safe_filter(candles, "pre_alert_flag")
+    hot_pre_alerts = _safe_filter(candles, "hot_pre_entry_flag")
+    impulses = _safe_filter_or(candles, "price_impulse_flag", "oi_impulse_flag").tail(12)
 
     fig = make_subplots(
         rows=4,
