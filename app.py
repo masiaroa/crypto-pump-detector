@@ -574,10 +574,7 @@ def _detail(symbol: str, timeframe: str, df, details) -> None:
     if bool(row["signal_active"]):
         fig.add_vline(x=row["timestamp"], line_width=1, line_dash="dash", line_color="#16a34a")
 
-    if {"oi_open", "oi_high", "oi_low", "oi_close"}.issubset(candles.columns):
-        _add_oi_candles(fig, candles, timeframe)
-    else:
-        fig.add_trace(go.Scatter(x=candles["timestamp"], y=candles["open_interest"], name="OI", line=dict(color="#0f766e")), row=2, col=1)
+    _add_oi_candles(fig, candles, timeframe)
     if not events.empty:
         fig.add_trace(
             go.Scatter(
@@ -609,7 +606,12 @@ def _detail(symbol: str, timeframe: str, df, details) -> None:
         max_abs = max(abs(funding_bps.min()), abs(funding_bps.max()), 1.0)
         fig.update_yaxes(title_text="bps", range=[-max_abs * 1.2, max_abs * 1.2], row=3, col=1)
     fig.add_trace(go.Bar(x=candles["timestamp"], y=candles["volume"], name="Volume", marker_color="#64748b"), row=4, col=1)
-    fig.update_layout(height=780, xaxis_rangeslider_visible=False, margin=dict(l=20, r=20, t=50, b=20))
+    # Desactivar rangeslider en TODOS los ejes x (go.Candlestick lo reactiva en xaxis2 por defecto)
+    fig.update_xaxes(rangeslider_visible=False)
+    # Fijar rango x para que go.Candlestick no restrinja la vista a solo datos recientes
+    if len(candles) > 0:
+        fig.update_xaxes(range=[candles["timestamp"].iloc[0], candles["timestamp"].iloc[-1]])
+    fig.update_layout(height=780, margin=dict(l=20, r=20, t=50, b=20))
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -657,45 +659,27 @@ def _event_type(row) -> str:
 
 
 def _add_oi_candles(fig, candles, timeframe: str) -> None:
-    width_ms = {"1h": 45 * 60 * 1000, "4h": 3.1 * 60 * 60 * 1000, "1d": 18 * 60 * 60 * 1000}.get(timeframe, 18 * 60 * 60 * 1000)
-    up = candles["oi_close"] >= candles["oi_open"]
-    colors = up.map({True: "#0f766e", False: "#ef4444"})
-    wick_x = []
-    wick_y = []
-    for row in candles.itertuples():
-        wick_x.extend([row.timestamp, row.timestamp, None])
-        wick_y.extend([row.oi_low, row.oi_high, None])
     fig.add_trace(
-        go.Scatter(
-            x=wick_x,
-            y=wick_y,
-            mode="lines",
-            name="OI wick",
-            line=dict(color="#64748b", width=1),
-            hoverinfo="skip",
-            showlegend=False,
+        go.Candlestick(
+            x=candles["timestamp"],
+            open=candles["oi_open"],
+            high=candles["oi_high"],
+            low=candles["oi_low"],
+            close=candles["oi_close"],
+            name="Open Interest",
+            increasing_line_color="#0f766e",
+            decreasing_line_color="#ef4444",
+            increasing_fillcolor="#0f766e",
+            decreasing_fillcolor="#ef4444",
         ),
         row=2,
         col=1,
     )
     oi_min = candles["oi_low"].min()
     oi_max = candles["oi_high"].max()
-    padding = max((oi_max - oi_min) * 0.15, oi_max * 0.01)
-    fig.update_yaxes(range=[oi_min - padding, oi_max + padding], row=2, col=1)
-    fig.add_trace(
-        go.Bar(
-            x=candles["timestamp"],
-            y=(candles["oi_close"] - candles["oi_open"]).abs(),
-            base=candles[["oi_open", "oi_close"]].min(axis=1),
-            width=width_ms,
-            name="Open Interest",
-            marker_color=colors,
-            customdata=candles[["oi_open", "oi_close", "oi_change_pct", "oi_change_zscore"]],
-            hovertemplate="OI<br>%{x}<br>open=%{customdata[0]:,.0f}<br>close=%{customdata[1]:,.0f}<br>change=%{customdata[2]:.2%}<br>z=%{customdata[3]:.2f}<extra></extra>",
-        ),
-        row=2,
-        col=1,
-    )
+    if pd.notna(oi_min) and pd.notna(oi_max) and oi_max > oi_min:
+        padding = max((oi_max - oi_min) * 0.15, oi_max * 0.01)
+        fig.update_yaxes(range=[oi_min - padding, oi_max + padding], row=2, col=1)
 
 
 def _selected_symbol(event, table, available: list[str]) -> str | None:

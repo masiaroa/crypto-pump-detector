@@ -41,6 +41,18 @@ crypto-pump-detector/
 
 ---
 
+## ⚠️ Despliegue en la nube — NO VIABLE
+
+El archivo `render.yaml` existe en el repositorio pero **el despliegue en Render (u otras plataformas cloud con IPs de EE.UU.) no funciona**.
+
+**Motivo:** Las APIs de datos de cripto que usa el proyecto (Binance Futures, Bybit, Bitget…) **bloquean peticiones procedentes de IPs de EE.UU.** por restricciones regulatorias. El escaneo devuelve `DataUnavailable` para todos los símbolos y la app queda vacía.
+
+**Estado actual:** `render.yaml` se conserva como referencia, pero hay que considerarlo **no funcional**. Intentar desplegarlo en regiones fuera de EE.UU. (p.ej. Frankfurt) tampoco garantiza que las APIs sean accesibles desde IPs de servidores cloud.
+
+**Conclusión:** Este proyecto es un **MVP local** pensado para ejecutarse en la máquina del desarrollador (WSL/Ubuntu), donde la IP del usuario no está bloqueada. No planificar despliegue cloud hasta resolver el acceso a las APIs.
+
+---
+
 ## Entorno de desarrollo
 
 | Herramienta | Versión mínima |
