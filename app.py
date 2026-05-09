@@ -307,9 +307,9 @@ def _overview(df, details, symbol_filter: str, sort_by_default: str = "early_bul
         # Add raw symbol column for navigation lookup
         history["_raw_symbol"] = history["raw_symbol"]
         event_cols = [
+            "symbol",
             "event_type",
             "timestamp",
-            "symbol",
             "timeframe",
             "close",
             "early_bullish_score",

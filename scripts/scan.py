@@ -17,7 +17,12 @@ def _sanitize_key(symbol: str, timeframe: str) -> str:
 def _export_charts(details: dict, charts_dir: Path) -> None:
     """Export per-symbol historical candle data to JSON files for the HTML dashboard."""
     charts_dir.mkdir(parents=True, exist_ok=True)
-    cols = ["timestamp", "close", "open", "high", "low", "open_interest", "volume", "funding_rate"]
+    cols = [
+        "timestamp",
+        "close", "open", "high", "low",
+        "open_interest", "oi_open", "oi_high", "oi_low", "oi_close",
+        "volume", "funding_rate",
+    ]
     for (raw_symbol, timeframe), df in details.items():
         available = [c for c in cols if c in df.columns]
         subset = df[available].copy()

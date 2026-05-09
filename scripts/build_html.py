@@ -106,7 +106,8 @@ def format_price(close: float) -> str:
 # Slides
 # ---------------------------------------------------------------------------
 
-def make_events_slide(events: list[dict], scan: dict[str, dict]) -> str:
+def make_events_slide(events: list[dict], scan: dict[str, dict],
+                      symbol_to_slide: dict[str, int]) -> str:
     now_str = pd.Timestamp.now("UTC").strftime("%Y-%m-%d %H:%M UTC")
 
     # Active signals from latest scan (sorted by score desc)
@@ -116,14 +117,16 @@ def make_events_slide(events: list[dict], scan: dict[str, dict]) -> str:
     signal_cards_html = ""
     if active:
         for row in active[:8]:
-            sym = esc(row.get("symbol", ""))
-            bull = float(row.get("early_bullish_score", 0))
-            risk = float(row.get("blowoff_risk_score", 0))
-            fc = str(row.get("funding_classification", "UNKNOWN"))
+            sym   = esc(row.get("symbol", ""))
+            bull  = float(row.get("early_bullish_score", 0))
+            risk  = float(row.get("blowoff_risk_score", 0))
+            fc    = str(row.get("funding_classification", "UNKNOWN"))
             close = float(row.get("close", 0))
-            icon = "🟢" if row.get("alert_triggered") else "🟡"
+            icon  = "🟢" if row.get("alert_triggered") else "🟡"
+            slide_idx = symbol_to_slide.get(str(row.get("symbol", "")), -1)
+            onclick = f'onclick="window.goTo({slide_idx})" style="cursor:pointer"' if slide_idx >= 0 else ""
             signal_cards_html += f"""
-              <div class="signal-card">
+              <div class="signal-card" {onclick}>
                 <div class="signal-card-head">
                   <span class="signal-sym">{icon} {sym}</span>
                   <span class="badge {funding_badge_class(fc)}">{esc(fc)}</span>
@@ -137,20 +140,28 @@ def make_events_slide(events: list[dict], scan: dict[str, dict]) -> str:
     else:
         signal_cards_html = '<p class="no-signals">No active signals right now</p>'
 
-    # Recent events table
+    # Events table — Symbol FIRST column, clickable → navigate to crypto slide
     event_rows_html = ""
     for ev in events[:30]:
-        et = str(ev.get("event_type", ""))
+        raw_sym   = str(ev.get("raw_symbol", ""))
+        sym_label = esc(ev.get("symbol", raw_sym))
+        slide_idx = symbol_to_slide.get(raw_sym, -1)
+        et     = str(ev.get("event_type", ""))
         et_cls = "et-entry" if et == "ENTRY" else ("et-hot" if et == "HOT_PRE_ENTRY" else "et-pre")
-        sym = esc(ev.get("symbol", ev.get("raw_symbol", "")))
-        ts  = str(ev.get("timestamp", ""))[:10]
+        ts   = str(ev.get("timestamp", ""))[:10]
         bull = float(ev.get("early_bullish_score", 0)) if ev.get("early_bullish_score") != "—" else 0.0
         risk = float(ev.get("blowoff_risk_score", 0))  if ev.get("blowoff_risk_score")  != "—" else 0.0
         fc   = str(ev.get("funding_classification", ""))
+
+        if slide_idx >= 0:
+            sym_cell = f'<td class="sym-cell sym-link" onclick="window.goTo({slide_idx})">{sym_label}</td>'
+        else:
+            sym_cell = f'<td class="sym-cell">{sym_label}</td>'
+
         event_rows_html += f"""
           <tr>
+            {sym_cell}
             <td><span class="event-type-badge {et_cls}">{esc(et)}</span></td>
-            <td class="sym-cell">{sym}</td>
             <td>{ts}</td>
             <td style="color:{score_color(bull)}">{bull:.0f}</td>
             <td style="color:#f85149">{risk:.0f}</td>
@@ -161,10 +172,10 @@ def make_events_slide(events: list[dict], scan: dict[str, dict]) -> str:
     if event_rows_html:
         events_table_html = f"""
         <div class="events-table-wrap">
-          <h3 class="section-label">Recent Events (last 21 days)</h3>
+          <h3 class="section-label">Recent Events — click symbol to navigate</h3>
           <table class="events-table">
             <thead>
-              <tr><th>Type</th><th>Symbol</th><th>Date</th><th>Bull</th><th>Risk</th><th>Funding</th></tr>
+              <tr><th>Symbol</th><th>Type</th><th>Date</th><th>Bull</th><th>Risk</th><th>Funding</th></tr>
             </thead>
             <tbody>{event_rows_html}</tbody>
           </table>
@@ -326,7 +337,9 @@ html, body {
 .signal-card {
   background: #161b22; border: 1px solid #30363d; border-radius: 8px;
   padding: 10px 12px; min-width: 160px; flex: 1 1 160px;
+  transition: border-color 0.15s;
 }
+.signal-card:hover { border-color: #58a6ff; }
 .signal-card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; gap: 6px; }
 .signal-sym { font-size: 12px; font-weight: 700; }
 .signal-metrics { display: flex; gap: 10px; font-size: 12px; font-weight: 600; }
@@ -337,6 +350,8 @@ html, body {
 .events-table th { text-align: left; padding: 5px 7px; color: #8b949e; border-bottom: 1px solid #30363d; white-space: nowrap; }
 .events-table td { padding: 4px 7px; border-bottom: 1px solid #21262d; white-space: nowrap; }
 .sym-cell { font-weight: 700; color: #58a6ff; }
+.sym-link  { cursor: pointer; text-decoration: underline dotted; }
+.sym-link:hover { color: #79c0ff; background: rgba(88,166,255,0.08); }
 .event-type-badge { padding: 1px 5px; border-radius: 4px; font-size: 9px; font-weight: 700; }
 .et-entry { background: #0d2a1a; color: #3fb950; }
 .et-hot   { background: #2d1b00; color: #d29922; }
@@ -409,10 +424,11 @@ STATIC_JS = r"""
   let   current   = 0;
   const inited    = new Set();
 
-  function goTo(idx) {
+  // Exposed globally so onclick="window.goTo(N)" in event table works
+  window.goTo = function (idx) {
     idx = Math.max(0, Math.min(N - 1, idx));
     slides[idx].scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }
+  };
 
   function updateUI(idx) {
     current = idx;
@@ -420,23 +436,19 @@ STATIC_JS = r"""
     counter.textContent = (idx + 1) + ' / ' + N;
   }
 
-  // Keyboard
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); goTo(current + 1); }
-    if (e.key === 'ArrowUp'   || e.key === 'k') { e.preventDefault(); goTo(current - 1); }
+    if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); window.goTo(current + 1); }
+    if (e.key === 'ArrowUp'   || e.key === 'k') { e.preventDefault(); window.goTo(current - 1); }
   });
 
-  // Dot clicks
-  dots.forEach((d, i) => d.addEventListener('click', () => goTo(i)));
+  dots.forEach((d, i) => d.addEventListener('click', () => window.goTo(i)));
 
-  // IntersectionObserver: track current slide + lazy init charts
   const io = new IntersectionObserver((entries) => {
     for (const entry of entries) {
       if (entry.isIntersecting) {
         const idx = parseInt(entry.target.dataset.idx, 10);
         updateUI(idx);
         if (!inited.has(idx)) { inited.add(idx); initCharts(entry.target, idx); }
-        // hide swipe hint after first interaction
         if (hint) hint.style.opacity = '0';
       }
     }
@@ -445,98 +457,134 @@ STATIC_JS = r"""
   slides.forEach(s => io.observe(s));
   updateUI(0);
 
-  // ── Chart defaults ──────────────────────────────────────────────────────
-  const BASE_OPTS = {
-    responsive: true,
-    maintainAspectRatio: false,
-    animation: { duration: 250 },
-    plugins: {
-      legend: { display: false },
-      tooltip: {
-        mode: 'index', intersect: false,
-        callbacks: { title: (items) => String(items[0]?.label || '').slice(0, 10) }
-      },
-    },
-    scales: {
-      x: {
-        display: true,
-        ticks: { color: '#6e7681', font: { size: 8 }, maxTicksLimit: 5, maxRotation: 0 },
-        grid:  { color: 'rgba(48,54,61,0.6)' },
-      },
-      y: {
-        display: true,
-        position: 'right',
-        ticks: { color: '#6e7681', font: { size: 8 }, maxTicksLimit: 4 },
-        grid:  { color: 'rgba(48,54,61,0.6)' },
-      },
-    },
+  // ── Shared scale / plugin defaults ──────────────────────────────────────
+  function deepClone(o) { return JSON.parse(JSON.stringify(o)); }
+
+  const SCALE_X_CAT = {
+    display: true,
+    ticks: { color: '#6e7681', font: { size: 8 }, maxTicksLimit: 5, maxRotation: 0 },
+    grid:  { color: 'rgba(48,54,61,0.6)' },
+  };
+  const SCALE_X_TIME = {
+    type: 'time',
+    time: { unit: 'day', displayFormats: { day: 'MMM d' } },
+    ticks: { color: '#6e7681', font: { size: 8 }, maxTicksLimit: 5, maxRotation: 0 },
+    grid:  { color: 'rgba(48,54,61,0.6)' },
+  };
+  const SCALE_Y = {
+    display: true, position: 'right',
+    ticks: { color: '#6e7681', font: { size: 8 }, maxTicksLimit: 4 },
+    grid:  { color: 'rgba(48,54,61,0.6)' },
   };
 
-  function deepClone(obj) { return JSON.parse(JSON.stringify(obj)); }
-
-  function lineChart(id, labels, values, color) {
+  // ── Japanese candlestick chart (price or OI) ─────────────────────────────
+  function candleChart(id, candleData) {
     const canvas = document.getElementById(id);
-    if (!canvas) return;
+    if (!canvas || !candleData.length) return;
     new Chart(canvas.getContext('2d'), {
-      type: 'line',
+      type: 'candlestick',
       data: {
-        labels,
-        datasets: [{ data: values, borderColor: color, backgroundColor: color + '18',
-                     borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.15 }],
+        datasets: [{
+          data: candleData,
+          color: { up: '#3fb950', down: '#f85149', unchanged: '#8b949e' },
+          borderColor: { up: '#3fb950', down: '#f85149', unchanged: '#8b949e' },
+        }],
       },
-      options: deepClone(BASE_OPTS),
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        animation: { duration: 200 },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => {
+                const r = ctx.raw;
+                const f = (v) => v >= 1000
+                  ? (+v).toLocaleString('en', { maximumFractionDigits: 0 })
+                  : String(+(+v).toPrecision(5));
+                return [`O: ${f(r.o)}`, `H: ${f(r.h)}`, `L: ${f(r.l)}`, `C: ${f(r.c)}`];
+              },
+            },
+          },
+        },
+        scales: { x: deepClone(SCALE_X_TIME), y: deepClone(SCALE_Y) },
+      },
     });
   }
 
+  // ── Bar chart (volume) ────────────────────────────────────────────────────
   function barChart(id, labels, values, color) {
     const canvas = document.getElementById(id);
     if (!canvas) return;
     new Chart(canvas.getContext('2d'), {
       type: 'bar',
-      data: {
-        labels,
-        datasets: [{ data: values, backgroundColor: color + 'cc', borderWidth: 0 }],
+      data: { labels, datasets: [{ data: values, backgroundColor: color + 'cc', borderWidth: 0 }] },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: { duration: 200 },
+        plugins: { legend: { display: false } },
+        scales: { x: deepClone(SCALE_X_CAT), y: deepClone(SCALE_Y) },
       },
-      options: deepClone(BASE_OPTS),
     });
   }
 
+  // ── Funding rate bar chart (bps) ──────────────────────────────────────────
   function fundingChart(id, labels, values) {
     const canvas = document.getElementById(id);
     if (!canvas) return;
     const colors = values.map(v => v >= 0 ? '#d29922cc' : '#f85149cc');
-    const opts = deepClone(BASE_OPTS);
-    opts.plugins.tooltip.callbacks.label = (item) => item.raw.toFixed(2) + ' bps';
     new Chart(canvas.getContext('2d'), {
       type: 'bar',
-      data: {
-        labels,
-        datasets: [{ data: values, backgroundColor: colors, borderWidth: 0 }],
+      data: { labels, datasets: [{ data: values, backgroundColor: colors, borderWidth: 0 }] },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: { duration: 200 },
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: (i) => i.raw.toFixed(2) + ' bps' } },
+        },
+        scales: { x: deepClone(SCALE_X_CAT), y: deepClone(SCALE_Y) },
       },
-      options: opts,
     });
   }
 
-  // ── Init charts for a given slide ───────────────────────────────────────
+  // ── Init charts for a given slide ────────────────────────────────────────
   function initCharts(slideEl, idx) {
-    if (idx === 0) return;  // events slide has no charts
+    if (idx === 0) return;
 
     const symbol = slideEl.dataset.symbol;
     const raw    = (typeof CHART_DATA !== 'undefined') ? CHART_DATA[symbol] : null;
     if (!raw || !raw.length) return;
 
-    const id     = 's' + idx;
-    const labels = raw.map(d => String(d.timestamp || '').slice(0, 10));
-    const close  = raw.map(d => +(d.close          || 0));
-    const oi     = raw.map(d => +(d.open_interest  || 0));
-    const vol    = raw.map(d => +(d.volume         || 0));
-    // Funding rate → basis points (× 10 000), rounded to 2dp
-    const fr     = raw.map(d => Math.round(+(d.funding_rate || 0) * 1e6) / 100);
+    const id  = 's' + idx;
+    const vol = raw.map(d => +(d.volume || 0));
+    const fr  = raw.map(d => Math.round(+(d.funding_rate || 0) * 1e6) / 100);
+    const lbl = raw.map(d => String(d.timestamp || '').slice(0, 10));
 
-    lineChart('price-' + id, labels, close, '#58a6ff');
-    lineChart('oi-'    + id, labels, oi,    '#3fb950');
-    barChart ('vol-'   + id, labels, vol,   '#8b949e');
-    fundingChart('fr-' + id, labels, fr);
+    // Price candlestick (requires open/high/low/close from scan data)
+    const priceCandles = raw
+      .filter(d => +d.open && +d.high && +d.low && +d.close)
+      .map(d => ({ x: Date.parse(d.timestamp), o: +d.open, h: +d.high, l: +d.low, c: +d.close }));
+    candleChart('price-' + id, priceCandles);
+
+    // OI candlestick — uses oi_open/high/low/close when available
+    const hasOiOhlc = raw.some(d => +d.oi_open > 0);
+    if (hasOiOhlc) {
+      const oiCandles = raw
+        .filter(d => +d.oi_open > 0)
+        .map(d => ({ x: Date.parse(d.timestamp), o: +d.oi_open, h: +d.oi_high, l: +d.oi_low, c: +(d.oi_close || d.open_interest) }));
+      candleChart('oi-' + id, oiCandles);
+    } else {
+      // Fallback: simple line with open_interest
+      const oiVals = raw.map(d => +(d.open_interest || 0));
+      const cvs = document.getElementById('oi-' + id);
+      if (cvs) new Chart(cvs.getContext('2d'), {
+        type: 'line',
+        data: { labels: lbl, datasets: [{ data: oiVals, borderColor: '#3fb950', backgroundColor: '#3fb95018', borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.15 }] },
+        options: { responsive: true, maintainAspectRatio: false, animation: { duration: 200 }, plugins: { legend: { display: false } }, scales: { x: deepClone(SCALE_X_CAT), y: deepClone(SCALE_Y) } },
+      });
+    }
+
+    barChart    ('vol-' + id, lbl, vol, '#8b949e');
+    fundingChart('fr-'  + id, lbl, fr);
   }
 })();
 """
@@ -553,7 +601,7 @@ def build_html(events: list[dict], scan: dict[str, dict], charts: dict[str, list
         key=lambda s: s.split(":")[-1],
     )
 
-    slides: list[str] = [make_events_slide(events, scan)]
+    slides: list[str] = [make_events_slide(events, scan, {sym: i + 1 for i, sym in enumerate(valid_symbols)})]
     for i, sym in enumerate(valid_symbols, start=1):
         slides.append(make_crypto_slide(i, scan[sym]))
 
@@ -588,8 +636,10 @@ def build_html(events: list[dict], scan: dict[str, dict], charts: dict[str, list
 {slides_html}
   </div>
 
-  <!-- Chart.js from CDN -->
+  <!-- Chart.js + financial plugin (candlestick) + date adapter -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.2.1/dist/chartjs-chart-financial.js"></script>
 
   <!-- Embedded chart data -->
   <script>const CHART_DATA = {chart_data_json};</script>
