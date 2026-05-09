@@ -1,0 +1,80 @@
+name: Build & Deploy Dashboard
+
+# Triggers:
+#   • Daily at 02:00 UTC (after Asia close)
+#   • Manual dispatch (Actions tab → "Run workflow")
+#   • Push to main when source code or config changes
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "config/**"
+      - "src/**"
+      - "scripts/**"
+
+# Required for GitHub Pages OIDC deploy
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one Pages deploy at a time
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  # ── Step 1: fetch live data, build HTML ───────────────────────────────────
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run scan (fetch live data from exchanges)
+        run: PYTHONPATH=src python scripts/scan.py
+        # If ALL APIs are blocked this will fail and the deploy is skipped cleanly.
+        # Partial failures (some symbols DataUnavailable) are handled gracefully
+        # inside scan_watchlist() — those symbols appear with close=0.
+
+      - name: Build static HTML dashboard
+        run: python scripts/build_html.py
+
+      - name: Show generated file info
+        run: |
+          ls -lh docs/index.html
+          echo "Slides: $(grep -c 'class="slide"' docs/index.html)"
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/
+
+  # ── Step 2: deploy to GitHub Pages ───────────────────────────────────────
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
