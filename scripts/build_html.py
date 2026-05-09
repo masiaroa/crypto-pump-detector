@@ -124,9 +124,9 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
             close = float(row.get("close", 0))
             icon  = "🟢" if row.get("alert_triggered") else "🟡"
             slide_idx = symbol_to_slide.get(str(row.get("symbol", "")), -1)
-            onclick = f'onclick="window.goTo({slide_idx})" style="cursor:pointer"' if slide_idx >= 0 else ""
+            goto_attr = f'data-goto="{slide_idx}" style="cursor:pointer"' if slide_idx >= 0 else ""
             signal_cards_html += f"""
-              <div class="signal-card" {onclick}>
+              <div class="signal-card" {goto_attr}>
                 <div class="signal-card-head">
                   <span class="signal-sym">{icon} {sym}</span>
                   <span class="badge {funding_badge_class(fc)}">{esc(fc)}</span>
@@ -154,7 +154,7 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
         fc   = str(ev.get("funding_classification", ""))
 
         if slide_idx >= 0:
-            sym_cell = f'<td class="sym-cell sym-link" onclick="window.goTo({slide_idx})">{sym_label}</td>'
+            sym_cell = f'<td class="sym-cell sym-link" data-goto="{slide_idx}">{sym_label}</td>'
         else:
             sym_cell = f'<td class="sym-cell">{sym_label}</td>'
 
@@ -625,6 +625,7 @@ def build_html(events: list[dict], scan: dict[str, dict], charts: dict[str, list
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Crypto perpetuals pump detector — live dashboard">
   <title>Crypto Pump Detector</title>
+  <link rel="icon" href="data:," />
   <style>{STATIC_CSS}</style>
 </head>
 <body>
@@ -636,6 +637,25 @@ def build_html(events: list[dict], scan: dict[str, dict], charts: dict[str, list
 {slides_html}
   </div>
 
+  <!-- Navigation (loads FIRST, before any CDN, so data-goto clicks always work) -->
+  <script>
+  (function() {{
+    var slides = document.querySelectorAll('.slide');
+    window.goTo = function(idx) {{
+      idx = Math.max(0, Math.min(slides.length - 1, idx));
+      slides[idx].scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+    }};
+    // Event delegation: any element with data-goto="N" navigates on click
+    document.addEventListener('click', function(e) {{
+      var el = e.target.closest('[data-goto]');
+      if (el) {{
+        e.preventDefault();
+        window.goTo(parseInt(el.dataset.goto, 10));
+      }}
+    }});
+  }})();
+  </script>
+
   <!-- Chart.js + financial plugin (candlestick) + date adapter -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -644,7 +664,7 @@ def build_html(events: list[dict], scan: dict[str, dict], charts: dict[str, list
   <!-- Embedded chart data -->
   <script>const CHART_DATA = {chart_data_json};</script>
 
-  <!-- App logic -->
+  <!-- App logic (keyboard nav, IntersectionObserver, chart init) -->
   <script>{STATIC_JS}</script>
 </body>
 </html>"""
