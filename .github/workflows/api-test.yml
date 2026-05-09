@@ -1,7 +1,7 @@
 name: API Viability Test
 
 # Run manually to verify that exchange APIs are reachable from GitHub Actions runners.
-# Check the logs: ✅ = OK, ❌ = blocked/error.
+# All steps use continue-on-error so ALL results are visible even if some APIs are blocked.
 
 on:
   workflow_dispatch:
@@ -12,48 +12,87 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ── Raw HTTP checks ──────────────────────────────────────────────────
+      # ── Raw HTTP checks (no -f flag so we always capture the response body) ──
 
-      - name: "Bybit — kline (candlestick)"
+      - name: "Bybit — kline HTTP status + response preview"
+        continue-on-error: true
         run: |
-          RESP=$(curl -sf --max-time 15 \
-            "https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=D&limit=3" \
-            | python3 -c "import sys,json; d=json.load(sys.stdin); print('retCode:', d.get('retCode'), '| candles:', len(d['result']['list']))")
-          echo "✅ Bybit kline: $RESP"
+          BODY=$(curl -s --max-time 15 \
+            "https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=D&limit=3")
+          echo "Response: ${BODY:0:300}"
+          echo "$BODY" | python3 -c "
+          import sys, json
+          try:
+              d = json.load(sys.stdin)
+              rows = len(d.get('result', {}).get('list', []))
+              print(f'✅ Bybit kline: retCode={d.get(\"retCode\")} | candles={rows}')
+          except Exception as e:
+              print(f'❌ Bybit kline: {e}')
+              raise SystemExit(1)
+          "
 
-      - name: "Bybit — Open Interest history"
+      - name: "Bybit — Open Interest HTTP status + response preview"
+        continue-on-error: true
         run: |
-          RESP=$(curl -sf --max-time 15 \
-            "https://api.bybit.com/v5/market/open-interest?category=linear&symbol=BTCUSDT&intervalTime=1d&limit=3" \
-            | python3 -c "import sys,json; d=json.load(sys.stdin); print('retCode:', d.get('retCode'), '| rows:', len(d['result']['list']))")
-          echo "✅ Bybit OI: $RESP"
+          BODY=$(curl -s --max-time 15 \
+            "https://api.bybit.com/v5/market/open-interest?category=linear&symbol=BTCUSDT&intervalTime=1d&limit=3")
+          echo "Response: ${BODY:0:300}"
+          echo "$BODY" | python3 -c "
+          import sys, json
+          try:
+              d = json.load(sys.stdin)
+              rows = len(d.get('result', {}).get('list', []))
+              print(f'✅ Bybit OI: retCode={d.get(\"retCode\")} | rows={rows}')
+          except Exception as e:
+              print(f'❌ Bybit OI: {e}')
+              raise SystemExit(1)
+          "
 
-      - name: "Bybit — Funding rate history"
+      - name: "Bybit — Funding rate HTTP status + response preview"
+        continue-on-error: true
         run: |
-          RESP=$(curl -sf --max-time 15 \
-            "https://api.bybit.com/v5/market/funding/history?category=linear&symbol=BTCUSDT&limit=3" \
-            | python3 -c "import sys,json; d=json.load(sys.stdin); print('retCode:', d.get('retCode'), '| rows:', len(d['result']['list']))")
-          echo "✅ Bybit Funding: $RESP"
+          BODY=$(curl -s --max-time 15 \
+            "https://api.bybit.com/v5/market/funding/history?category=linear&symbol=BTCUSDT&limit=3")
+          echo "Response: ${BODY:0:300}"
+          echo "$BODY" | python3 -c "
+          import sys, json
+          try:
+              d = json.load(sys.stdin)
+              rows = len(d.get('result', {}).get('list', []))
+              print(f'✅ Bybit Funding: retCode={d.get(\"retCode\")} | rows={rows}')
+          except Exception as e:
+              print(f'❌ Bybit Funding: {e}')
+              raise SystemExit(1)
+          "
 
       - name: "Binance USDT-M — kline"
+        continue-on-error: true
         run: |
-          CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 \
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 \
             "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=1d&limit=3")
-          [ "$CODE" = "200" ] && echo "✅ Binance USDT-M kline: HTTP $CODE" || echo "❌ Binance USDT-M kline: HTTP $CODE (blocked?)"
+          [ "$STATUS" = "200" ] \
+            && echo "✅ Binance USDT-M kline: HTTP $STATUS" \
+            || echo "❌ Binance USDT-M kline: HTTP $STATUS (likely geo-blocked)"
 
       - name: "Binance USDT-M — OI historical"
+        continue-on-error: true
         run: |
-          CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 \
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 \
             "https://fapi.binance.com/futures/data/openInterestHist?symbol=BTCUSDT&period=1d&limit=3")
-          [ "$CODE" = "200" ] && echo "✅ Binance USDT-M OI: HTTP $CODE" || echo "❌ Binance USDT-M OI: HTTP $CODE (blocked?)"
+          [ "$STATUS" = "200" ] \
+            && echo "✅ Binance USDT-M OI: HTTP $STATUS" \
+            || echo "❌ Binance USDT-M OI: HTTP $STATUS (likely geo-blocked)"
 
       - name: "Binance COIN-M — kline (BCHUSD_PERP)"
+        continue-on-error: true
         run: |
-          CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 \
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 \
             "https://dapi.binance.com/dapi/v1/klines?symbol=BCHUSD_PERP&interval=1d&limit=3")
-          [ "$CODE" = "200" ] && echo "✅ Binance COIN-M kline: HTTP $CODE" || echo "❌ Binance COIN-M kline: HTTP $CODE (blocked?)"
+          [ "$STATUS" = "200" ] \
+            && echo "✅ Binance COIN-M kline: HTTP $STATUS" \
+            || echo "❌ Binance COIN-M kline: HTTP $STATUS (likely geo-blocked)"
 
-      # ── Full Python scan test ────────────────────────────────────────────
+      # ── Full Python scan (uses existing fallback logic in data_clients.py) ──
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -65,32 +104,35 @@ jobs:
         run: pip install -q -r requirements.txt
 
       - name: "Python — fetch BYBIT:BTCUSDT.P (1d, 10 candles)"
+        continue-on-error: true
         run: |
           PYTHONPATH=src python - <<'EOF'
           from pump_detector.data_clients import fetch_market_data, DataUnavailable
           try:
               d = fetch_market_data("BYBIT:BTCUSDT.P", "1d", limit=10)
-              print(f"✅ BYBIT BTCUSDT  via {d.provider}: {len(d.candles)} candles")
-              print(d.candles[["timestamp","close","open_interest","funding_rate"]].tail(3).to_string(index=False))
-          except DataUnavailable as e:
-              print(f"❌ BYBIT BTCUSDT: {e}")
+              last = d.candles.iloc[-1]
+              print(f"✅ BYBIT BTCUSDT via {d.provider}: {len(d.candles)} candles")
+              print(f"   close={last['close']}  OI={last.get('open_interest')}  FR={last.get('funding_rate')}")
+          except Exception as e:
+              print(f"❌ BYBIT BTCUSDT: {type(e).__name__}: {e}")
               raise SystemExit(1)
           EOF
 
       - name: "Python — fetch BINANCE:BCHUSD.P (1d, 10 candles)"
+        continue-on-error: true
         run: |
           PYTHONPATH=src python - <<'EOF'
           from pump_detector.data_clients import fetch_market_data, DataUnavailable
           try:
               d = fetch_market_data("BINANCE:BCHUSD.P", "1d", limit=10)
-              print(f"✅ BINANCE BCH  via {d.provider}: {len(d.candles)} candles")
-              print(d.candles[["timestamp","close","open_interest","funding_rate"]].tail(3).to_string(index=False))
-          except DataUnavailable as e:
-              print(f"❌ BINANCE BCH: {e}")
-              # Non-fatal: Bybit fallback might cover this
+              last = d.candles.iloc[-1]
+              print(f"✅ BINANCE BCH via {d.provider}: {len(d.candles)} candles")
+              print(f"   close={last['close']}  OI={last.get('open_interest')}")
+          except Exception as e:
+              print(f"❌ BINANCE BCH (Bybit fallback also tried): {type(e).__name__}: {e}")
           EOF
 
-      - name: "Python — full watchlist scan (summary)"
+      - name: "Python — full watchlist scan summary"
         continue-on-error: true
         run: |
           PYTHONPATH=src python - <<'EOF'
@@ -98,9 +140,16 @@ jobs:
           df, details = scan_watchlist(persist=False)
           ok    = df[df["close"] > 0]
           fails = df[df["close"] == 0]
-          print(f"✅ Scan complete: {len(ok)}/{len(df)} symbols OK, {len(details)} chart series")
+          print(f"Scan result: {len(ok)}/{len(df)} symbols OK | {len(details)} chart series")
+          print()
+          if not ok.empty:
+              print("✅ Working symbols:")
+              for _, r in ok[["symbol", "close"]].iterrows():
+                  print(f"   {r['symbol']:<32} close={r['close']}")
           if not fails.empty:
+              print()
               print("❌ Failed symbols:")
-              print(fails[["symbol","notes"]].to_string(index=False))
+              for _, r in fails[["symbol", "notes"]].iterrows():
+                  print(f"   {r['symbol']:<32} {str(r['notes'])[:80]}")
           EOF
 
