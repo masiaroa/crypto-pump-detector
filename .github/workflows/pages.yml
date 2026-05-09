@@ -16,24 +16,24 @@ on:
       - "src/**"
       - "scripts/**"
 
-# Required for GitHub Pages OIDC deploy
+# Write access needed to commit docs/index.html back to the repo
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
-# Only one Pages deploy at a time
+# Only one deploy at a time
 concurrency:
   group: pages
   cancel-in-progress: false
 
 jobs:
-  # ── Step 1: fetch live data, build HTML ───────────────────────────────────
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # Full history so we can push back
+          fetch-depth: 0
 
       - name: Setup Python 3.12
         uses: actions/setup-python@v5
@@ -46,9 +46,6 @@ jobs:
 
       - name: Run scan (fetch live data from exchanges)
         run: PYTHONPATH=src python scripts/scan.py
-        # If ALL APIs are blocked this will fail and the deploy is skipped cleanly.
-        # Partial failures (some symbols DataUnavailable) are handled gracefully
-        # inside scan_watchlist() — those symbols appear with close=0.
 
       - name: Build static HTML dashboard
         run: python scripts/build_html.py
@@ -56,25 +53,15 @@ jobs:
       - name: Show generated file info
         run: |
           ls -lh docs/index.html
-          echo "Slides: $(grep -c 'class="slide"' docs/index.html)"
+          echo "Slides: $(grep -c 'class=\"slide\"' docs/index.html)"
 
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: docs/
-
-  # ── Step 2: deploy to GitHub Pages ───────────────────────────────────────
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
-
+      - name: Commit and push docs/index.html
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/index.html data/latest_scan.csv data/event_history.csv
+          # Only commit if something actually changed
+          git diff --staged --quiet \
+            && echo "Nothing changed — skipping commit" \
+            || (git commit -m "chore(docs): update dashboard $(date -u +%Y-%m-%dT%H:%M)Z [skip ci]" \
+                && git push)
