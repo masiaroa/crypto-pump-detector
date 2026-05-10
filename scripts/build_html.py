@@ -102,6 +102,45 @@ def format_price(close: float) -> str:
     return "—"
 
 
+def positive_float(value: object) -> bool:
+    try:
+        return float(value) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def row_from_event(event: dict) -> dict:
+    raw_symbol = str(event.get("raw_symbol", ""))
+    exchange = raw_symbol.split(":", 1)[0] if ":" in raw_symbol else ""
+    return {
+        "symbol": raw_symbol,
+        "exchange": exchange,
+        "close": event.get("close", 0),
+        "early_bullish_score": event.get("early_bullish_score", 0),
+        "blowoff_risk_score": event.get("blowoff_risk_score", 0),
+        "funding_classification": event.get("funding_classification", "UNKNOWN"),
+        "funding_rate": event.get("funding_rate", 0),
+        "oi_change_pct": event.get("oi_change_pct", 0),
+        "signal_active": event.get("event_type") == "ENTRY",
+        "alert_triggered": event.get("event_type") in {"ENTRY", "HOT_PRE_ENTRY"},
+    }
+
+
+def row_from_chart(symbol: str, candles: list) -> dict:
+    exchange = symbol.split(":", 1)[0] if ":" in symbol else ""
+    last = candles[-1] if candles else {}
+    return {
+        "symbol": symbol,
+        "exchange": exchange,
+        "close": last.get("close", 0),
+        "early_bullish_score": 0,
+        "blowoff_risk_score": 0,
+        "funding_classification": "UNKNOWN",
+        "funding_rate": last.get("funding_rate", 0),
+        "oi_change_pct": 0,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Slides
 # ---------------------------------------------------------------------------
@@ -423,11 +462,13 @@ STATIC_JS = r"""
   const N         = slides.length;
   let   current   = 0;
   const inited    = new Set();
+  let   wheelLock = false;
+  let   touchStartY = null;
 
   // Exposed globally so onclick="window.goTo(N)" in event table works
   window.goTo = function (idx) {
     idx = Math.max(0, Math.min(N - 1, idx));
-    slides[idx].scrollIntoView({ behavior: 'smooth', block: 'start' });
+    slidesEl.scrollTo({ top: slides[idx].offsetTop, behavior: 'smooth' });
   };
 
   function updateUI(idx) {
@@ -442,6 +483,32 @@ STATIC_JS = r"""
   });
 
   dots.forEach((d, i) => d.addEventListener('click', () => window.goTo(i)));
+
+  function stepSlides(direction) {
+    const next = Math.max(0, Math.min(N - 1, current + direction));
+    if (next !== current) window.goTo(next);
+  }
+
+  slidesEl.addEventListener('wheel', (e) => {
+    if (Math.abs(e.deltaY) < Math.abs(e.deltaX) || Math.abs(e.deltaY) < 18) return;
+    e.preventDefault();
+    if (wheelLock) return;
+    wheelLock = true;
+    stepSlides(e.deltaY > 0 ? 1 : -1);
+    window.setTimeout(() => { wheelLock = false; }, 450);
+  }, { passive: false });
+
+  slidesEl.addEventListener('touchstart', (e) => {
+    touchStartY = e.changedTouches[0].clientY;
+  }, { passive: true });
+
+  slidesEl.addEventListener('touchend', (e) => {
+    if (touchStartY === null) return;
+    const deltaY = touchStartY - e.changedTouches[0].clientY;
+    touchStartY = null;
+    if (Math.abs(deltaY) < 45) return;
+    stepSlides(deltaY > 0 ? 1 : -1);
+  }, { passive: true });
 
   const io = new IntersectionObserver((entries) => {
     for (const entry of entries) {
@@ -595,15 +662,38 @@ STATIC_JS = r"""
 # ---------------------------------------------------------------------------
 
 def build_html(events: list[dict], scan: dict[str, dict], charts: dict[str, list]) -> str:
-    # Build per-crypto slides: symbols with valid close price, alpha-sorted
-    valid_symbols = sorted(
-        [sym for sym, row in scan.items() if float(row.get("close", 0)) > 0],
-        key=lambda s: s.split(":")[-1],
-    )
+    fallback_rows: dict[str, dict] = {}
+    for symbol, candles in charts.items():
+        if candles:
+            fallback_rows[symbol] = row_from_chart(symbol, candles)
+    for event in events:
+        raw_symbol = str(event.get("raw_symbol", ""))
+        if raw_symbol and raw_symbol not in fallback_rows:
+            fallback_rows[raw_symbol] = row_from_event(event)
 
-    slides: list[str] = [make_events_slide(events, scan, {sym: i + 1 for i, sym in enumerate(valid_symbols)})]
+    # Build per-crypto slides from live scan rows when possible, then fall back
+    # to chart/event data so GitHub Pages remains navigable after cloud API blocks.
+    slide_symbols = {
+        sym for sym, row in scan.items()
+        if positive_float(row.get("close", 0)) or sym in fallback_rows
+    }
+    slide_symbols.update(sym for sym, row in fallback_rows.items() if positive_float(row.get("close", 0)))
+    valid_symbols = sorted(slide_symbols, key=lambda s: s.split(":")[-1])
+
+    slide_rows: dict[str, dict] = {}
+    for sym in valid_symbols:
+        scan_row = dict(scan.get(sym, {}))
+        fallback_row = fallback_rows.get(sym, {})
+        if positive_float(scan_row.get("close", 0)):
+            slide_rows[sym] = scan_row
+        else:
+            merged = dict(scan_row)
+            merged.update(fallback_row)
+            slide_rows[sym] = merged
+
+    slides: list[str] = [make_events_slide(events, slide_rows, {sym: i + 1 for i, sym in enumerate(valid_symbols)})]
     for i, sym in enumerate(valid_symbols, start=1):
-        slides.append(make_crypto_slide(i, scan[sym]))
+        slides.append(make_crypto_slide(i, slide_rows[sym]))
 
     n = len(slides)
 
@@ -640,10 +730,11 @@ def build_html(events: list[dict], scan: dict[str, dict], charts: dict[str, list
   <!-- Navigation (loads FIRST, before any CDN, so data-goto clicks always work) -->
   <script>
   (function() {{
+    var slidesEl = document.getElementById('slides');
     var slides = document.querySelectorAll('.slide');
     window.goTo = function(idx) {{
       idx = Math.max(0, Math.min(slides.length - 1, idx));
-      slides[idx].scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+      slidesEl.scrollTo({{ top: slides[idx].offsetTop, behavior: 'smooth' }});
     }};
     // Event delegation: any element with data-goto="N" navigates on click
     document.addEventListener('click', function(e) {{
