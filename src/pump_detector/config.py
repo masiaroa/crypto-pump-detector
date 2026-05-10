@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,8 @@ ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = ROOT / "config"
 DATA_DIR = ROOT / "data"
 
+VALID_TIMEFRAMES = {"1h", "4h", "1d"}
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -21,7 +24,7 @@ class Settings:
 
 
 DEFAULT_SETTINGS = {
-    "timeframes": ["1d"],
+    "timeframes": ["4h"],
     "alert_conditions": {
         "require_price_impulse": True,
         "require_oi_impulse": True,
@@ -65,6 +68,17 @@ def load_settings(path: Path | None = None) -> Settings:
     ensure_default_files()
     raw = read_yaml(path or CONFIG_DIR / "settings.yaml")
     merged = DEFAULT_SETTINGS | (raw or {})
+
+    # Allow env-var override: SCAN_TIMEFRAME=1d  (single value)
+    env_tf = os.environ.get("SCAN_TIMEFRAME", "").strip()
+    if env_tf:
+        if env_tf not in VALID_TIMEFRAMES:
+            raise ValueError(
+                f"SCAN_TIMEFRAME='{env_tf}' is not valid. "
+                f"Allowed values: {sorted(VALID_TIMEFRAMES)}"
+            )
+        merged["timeframes"] = [env_tf]
+
     return Settings(
         timeframes=list(merged["timeframes"]),
         alert_conditions=dict(merged["alert_conditions"]),

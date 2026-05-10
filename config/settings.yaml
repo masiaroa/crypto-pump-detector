@@ -1,5 +1,5 @@
 timeframes:
-- 1d
+- 4h
 
 alert_conditions:
   require_price_impulse: true

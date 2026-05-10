@@ -1,0 +1,37 @@
+import pytest
+
+from pump_detector.config import VALID_TIMEFRAMES, load_settings
+
+
+def test_load_settings_default_timeframe_is_4h(monkeypatch):
+    """Without env-var override the default timeframe should be 4h."""
+    monkeypatch.delenv("SCAN_TIMEFRAME", raising=False)
+    settings = load_settings()
+    assert settings.timeframes == ["4h"]
+
+
+def test_scan_timeframe_env_overrides_yaml(monkeypatch):
+    """SCAN_TIMEFRAME env var replaces the YAML/default timeframes list."""
+    monkeypatch.setenv("SCAN_TIMEFRAME", "1d")
+    settings = load_settings()
+    assert settings.timeframes == ["1d"]
+
+
+def test_scan_timeframe_env_invalid_raises(monkeypatch):
+    """An invalid SCAN_TIMEFRAME value must raise ValueError."""
+    monkeypatch.setenv("SCAN_TIMEFRAME", "15m")
+    with pytest.raises(ValueError, match="not valid"):
+        load_settings()
+
+
+def test_scan_timeframe_env_empty_string_is_ignored(monkeypatch):
+    """Empty string should be treated as 'not set'."""
+    monkeypatch.setenv("SCAN_TIMEFRAME", "  ")
+    settings = load_settings()
+    # Falls back to YAML / default
+    assert len(settings.timeframes) >= 1
+
+
+def test_valid_timeframes_constant():
+    assert VALID_TIMEFRAMES == {"1h", "4h", "1d"}
+

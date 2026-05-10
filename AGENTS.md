@@ -161,6 +161,7 @@ storage:
 - `scan_watchlist()` devuelve `(DataFrame, dict[(symbol, timeframe) → DataFrame])`. Nunca asumas que `persist=True` por defecto (en scripts/tests puede ser `False`).
 - `SignalSnapshot` es un `@dataclass(frozen=True)`. Para generar snapshots vacíos usa `_blank_snapshot()` en `scanner.py`.
 - Tests en `tests/` usan `pytest` con `pythonpath = ["src"]` declarado en `pyproject.toml`.
+- **`SCAN_TIMEFRAME`** env var override: se lee en `load_settings()`. Solo acepta un valor de `VALID_TIMEFRAMES = {"1h", "4h", "1d"}`.
 
 ---
 
