@@ -67,6 +67,11 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Scheduled/manual builds can start from an older checkout while
+          # main has advanced. Rebase first, preserving generated artifacts.
+          git pull --rebase --autostash origin main
+
           git add docs/index.html data/latest_scan.csv data/event_history.csv
           [ -d data/liquidations ] && git add data/liquidations || true
           [ -f data/liquidations/_ws_history.jsonl ] && git add -f data/liquidations/_ws_history.jsonl || true
@@ -74,4 +79,4 @@ jobs:
           git diff --staged --quiet \
             && echo "Nothing changed — skipping commit" \
             || (git commit -m "chore(docs): update dashboard $(date -u +%Y-%m-%dT%H:%M)Z [skip ci]" \
-                && git push)
+                && (git push || (git pull --rebase origin main && git push)))
