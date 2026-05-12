@@ -101,3 +101,19 @@ def test_build_html_daily_change_falls_back_to_scan_return_without_chart_ohlc():
     html = build_html([], scan, charts={})
 
     assert "-1.2%" in html
+
+
+def test_load_charts_falls_back_to_previous_embedded_chart_data(monkeypatch, tmp_path):
+    docs_dir = tmp_path / "docs"
+    charts_dir = tmp_path / "data" / "charts"
+    docs_dir.mkdir(parents=True)
+    docs_dir.joinpath("index.html").write_text(
+        '<script>const CHART_DATA = {"BYBIT:ADAUSDT.P":[{"close":0.25}]};</script>',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(build_html_module, "DOCS_DIR", docs_dir)
+    monkeypatch.setattr(build_html_module, "CHARTS_DIR", charts_dir)
+
+    charts = build_html_module.load_charts()
+
+    assert charts == {"BYBIT:ADAUSDT.P": [{"close": 0.25}]}

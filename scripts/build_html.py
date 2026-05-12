@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import html as html_mod
 import json
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -54,7 +55,7 @@ def load_charts() -> dict[str, list]:
     """Returns {symbol: [candle_dict, ...]} for last 90 candles per symbol."""
     charts: dict[str, list] = {}
     if not CHARTS_DIR.exists():
-        return charts
+        return load_embedded_charts()
     for f in sorted(CHARTS_DIR.glob("*.json")):
         try:
             obj = json.loads(f.read_text("utf-8"))
@@ -64,7 +65,32 @@ def load_charts() -> dict[str, list]:
             charts[sym] = data[-90:] if len(data) > 90 else data
         except Exception:
             pass
-    return charts
+    return charts or load_embedded_charts()
+
+
+def load_embedded_charts(path: Path | None = None) -> dict[str, list]:
+    """Recover chart data embedded in a previous static HTML build."""
+    path = path or (DOCS_DIR / "index.html")
+    if not path.exists():
+        return {}
+    try:
+        html = path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    match = re.search(r"const\s+CHART_DATA\s*=\s*(\{.*?\});</script>", html, re.S)
+    if not match:
+        return {}
+    try:
+        data = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        str(symbol): rows[-90:] if len(rows) > 90 else rows
+        for symbol, rows in data.items()
+        if isinstance(rows, list) and rows
+    }
 
 
 def load_liquidations() -> dict[str, list]:
