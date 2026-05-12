@@ -99,7 +99,15 @@ Versión estática estilo GitHub Pages (opcional):
 
 ```bash
 PYTHONPATH=src python scripts/build_html.py
+python scripts/validate_static_html.py docs/index.html
 python -m http.server 8000 --directory docs   # http://localhost:8000
+```
+
+GitHub Pages se publica desde GitHub Actions como artifact, sin commits
+automaticos al repo. Configuracion necesaria una vez:
+
+```text
+Settings -> Pages -> Build and deployment -> Source -> GitHub Actions
 ```
 
 Notas:

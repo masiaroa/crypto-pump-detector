@@ -16,9 +16,11 @@ on:
       - "src/**"
       - "scripts/**"
 
-# Write access needed to commit docs/index.html back to the repo
+# Pages artifact deployment. Generated files are published without commits.
 permissions:
-  contents: write
+  contents: read
+  pages: write
+  id-token: write
 
 # Only one deploy at a time
 concurrency:
@@ -28,12 +30,15 @@ concurrency:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          # Full history so we can push back
-          fetch-depth: 0
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
 
       - name: Setup Python 3.12
         uses: actions/setup-python@v5
@@ -56,27 +61,22 @@ jobs:
         run: PYTHONPATH=src python scripts/scan.py
 
       - name: Build static HTML dashboard
-        run: python scripts/build_html.py
+        run: PYTHONPATH=src python scripts/build_html.py
+
+      - name: Validate static HTML dashboard
+        run: python scripts/validate_static_html.py docs/index.html
 
       - name: Show generated file info
         run: |
           ls -lh docs/index.html
           echo "Slides: $(grep -c 'class=\"slide\"' docs/index.html)"
+          echo "Chart JSON files: $([ -d data/charts ] && find data/charts -name '*.json' | wc -l || echo 0)"
 
-      - name: Commit and push docs/index.html
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
 
-          # Scheduled/manual builds can start from an older checkout while
-          # main has advanced. Rebase first, preserving generated artifacts.
-          git pull --rebase --autostash origin main
-
-          git add docs/index.html data/latest_scan.csv data/event_history.csv
-          [ -d data/liquidations ] && git add data/liquidations || true
-          [ -f data/liquidations/_ws_history.jsonl ] && git add -f data/liquidations/_ws_history.jsonl || true
-          # Only commit if something actually changed
-          git diff --staged --quiet \
-            && echo "Nothing changed — skipping commit" \
-            || (git commit -m "chore(docs): update dashboard $(date -u +%Y-%m-%dT%H:%M)Z [skip ci]" \
-                && (git push || (git pull --rebase origin main && git push)))
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

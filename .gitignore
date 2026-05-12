@@ -13,8 +13,7 @@ data/*.log
 data/charts/
 
 # Generated HTML (produced by build_html.py)
-# docs/index.html is committed to git so GitHub Pages "Deploy from branch" can serve it.
-# The CI workflow regenerates and re-commits it on every scan.
+# GitHub Pages deploys docs/ from an Actions artifact; CI does not commit it.
 
 # Secretos locales
 .env

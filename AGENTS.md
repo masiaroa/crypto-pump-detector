@@ -107,7 +107,12 @@ PYTHONPATH=src streamlit run app.py
 
 # Build estático del dashboard (lo que usa GitHub Pages)
 PYTHONPATH=src python scripts/build_html.py
+python scripts/validate_static_html.py docs/index.html
 ```
+
+> **GitHub Pages:** El workflow publica `docs/` como artifact de GitHub Actions;
+> ya no commitea `docs/index.html` ni `data/*.csv` al repositorio.
+> Configura Pages como `Settings -> Pages -> Build and deployment -> Source -> GitHub Actions`.
 
 ---
 
