@@ -21,6 +21,11 @@ from pathlib import Path
 
 import pandas as pd
 
+try:
+    from pump_detector.liquidations.executed_store import read_recent as read_recent_liquidations
+except Exception:  # pragma: no cover - build still works without PYTHONPATH=src
+    read_recent_liquidations = None
+
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 CHARTS_DIR = DATA_DIR / "charts"
@@ -68,8 +73,8 @@ def load_charts() -> dict[str, list]:
     return charts or load_embedded_charts()
 
 
-def load_embedded_charts(path: Path | None = None) -> dict[str, list]:
-    """Recover chart data embedded in a previous static HTML build."""
+def load_embedded_json(global_name: str, path: Path | None = None) -> dict:
+    """Recover a JSON object embedded in a previous static HTML build."""
     path = path or (DOCS_DIR / "index.html")
     if not path.exists():
         return {}
@@ -77,7 +82,8 @@ def load_embedded_charts(path: Path | None = None) -> dict[str, list]:
         html = path.read_text(encoding="utf-8")
     except OSError:
         return {}
-    match = re.search(r"const\s+CHART_DATA\s*=\s*(\{.*?\});</script>", html, re.S)
+    pattern = rf"const\s+{re.escape(global_name)}\s*=\s*(\{{.*?\}});</script>"
+    match = re.search(pattern, html, re.S)
     if not match:
         return {}
     try:
@@ -86,6 +92,12 @@ def load_embedded_charts(path: Path | None = None) -> dict[str, list]:
         return {}
     if not isinstance(data, dict):
         return {}
+    return data
+
+
+def load_embedded_charts(path: Path | None = None) -> dict[str, list]:
+    """Recover chart data embedded in a previous static HTML build."""
+    data = load_embedded_json("CHART_DATA", path)
     return {
         str(symbol): rows[-90:] if len(rows) > 90 else rows
         for symbol, rows in data.items()
@@ -93,11 +105,54 @@ def load_embedded_charts(path: Path | None = None) -> dict[str, list]:
     }
 
 
-def load_liquidations() -> dict[str, list]:
+def load_embedded_liquidations(path: Path | None = None) -> dict[str, list]:
+    """Recover liquidation data embedded in a previous static HTML build."""
+    data = load_embedded_json("LIQUIDATION_DATA", path)
+    liquidations: dict[str, list] = {}
+    for symbol, rows in data.items():
+        if not isinstance(rows, list) or not rows:
+            continue
+        normalized = []
+        for row in rows[-250:]:
+            if not isinstance(row, dict):
+                continue
+            normalized_row = dict(row)
+            if "notional" not in normalized_row and "amount" in normalized_row:
+                normalized_row["notional"] = normalized_row["amount"]
+            normalized.append(normalized_row)
+        if normalized:
+            liquidations[str(symbol)] = normalized
+    return liquidations
+
+
+def load_ws_history_liquidations(symbols: dict[str, dict] | None = None) -> dict[str, list]:
+    """Build per-symbol liquidation rows from the rolling WS history file."""
+    if read_recent_liquidations is None:
+        return {}
+    history_path = LIQUIDATIONS_DIR / "_ws_history.jsonl"
+    if not history_path.exists():
+        return {}
+    liquidations: dict[str, list] = {}
+    for symbol, scan_row in (symbols or {}).items():
+        timeframe = str(scan_row.get("timeframe") or "1d")
+        try:
+            frame = read_recent_liquidations(history_path, symbol, timeframe)
+        except Exception:
+            continue
+        if frame.empty:
+            continue
+        rows = frame.tail(250).copy()
+        if "timestamp" in rows.columns:
+            rows["timestamp"] = rows["timestamp"].astype(str)
+        liquidations[symbol] = rows.fillna(0).to_dict(orient="records")
+    return liquidations
+
+
+def load_liquidations(symbols: dict[str, dict] | None = None) -> dict[str, list]:
     """Returns {symbol: [liquidation_dict, ...]} for static overlays."""
     liquidations: dict[str, list] = {}
     if not LIQUIDATIONS_DIR.exists():
-        return liquidations
+        return load_embedded_liquidations()
     for f in sorted(LIQUIDATIONS_DIR.glob("*.json")):
         if f.name.startswith("_"):
             continue
@@ -108,7 +163,7 @@ def load_liquidations() -> dict[str, list]:
             liquidations[sym] = data[-250:] if len(data) > 250 else data
         except Exception:
             pass
-    return liquidations
+    return liquidations or load_ws_history_liquidations(symbols) or load_embedded_liquidations()
 
 
 # ---------------------------------------------------------------------------
@@ -945,7 +1000,8 @@ if __name__ == "__main__":
     events = load_events()
     scan   = load_scan()
     charts = load_charts()
-    liquidations = load_liquidations()
+    liquidation_symbols = {symbol: scan.get(symbol, {}) for symbol in sorted(set(scan) | set(charts))}
+    liquidations = load_liquidations(liquidation_symbols)
 
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
     content = build_html(events, scan, charts, liquidations)

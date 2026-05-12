@@ -55,10 +55,28 @@ def _export_liquidations(liquidations: dict, liquidations_dir: Path) -> None:
         (liquidations_dir / fname).write_text(json.dumps(out), encoding="utf-8")
 
 
+def _liquidation_settings_for_static_export(settings) -> dict:
+    """Use WS history for static exports when it exists, without changing app defaults."""
+    liq_cfg = dict(settings.liquidations or {})
+    if not liq_cfg.get("enabled", True):
+        return liq_cfg
+
+    executed_cfg = dict(liq_cfg.get("executed") or {})
+    history_file = executed_cfg.get("history_file") or "data/liquidations/_ws_history.jsonl"
+    history_path = Path(history_file)
+    if not history_path.is_absolute():
+        history_path = ROOT / history_path
+    if history_path.exists():
+        executed_cfg["enabled"] = True
+    liq_cfg["executed"] = executed_cfg
+    return liq_cfg
+
+
 def _fetch_liquidations_for_details(details: dict, settings) -> dict:
     rows = {}
+    liq_settings = _liquidation_settings_for_static_export(settings)
     for raw_symbol, timeframe in details:
-        frame = fetch_liquidation_map(raw_symbol, timeframe, settings=settings.liquidations)
+        frame = fetch_liquidation_map(raw_symbol, timeframe, settings=liq_settings)
         if not frame.empty:
             rows[(raw_symbol, timeframe)] = frame
     return rows

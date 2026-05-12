@@ -1,6 +1,7 @@
 import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 
@@ -36,3 +37,45 @@ def test_export_liquidations_writes_per_symbol_json(tmp_path):
     assert payload["timeframe"] == "4h"
     assert payload["data"][0]["kind"] == "executed"
     assert payload["data"][0]["price"] == 60500.0
+
+
+def test_fetch_liquidations_for_details_uses_existing_ws_history_when_exporting_static(tmp_path):
+    history = tmp_path / "_ws_history.jsonl"
+    history.write_text(
+        json.dumps(
+            {
+                "timestamp_ms": int(pd.Timestamp.now(tz="UTC").timestamp() * 1000),
+                "timestamp": pd.Timestamp.now(tz="UTC").isoformat(),
+                "symbol": "BTCUSDT",
+                "price": 60500.0,
+                "quantity": 0.5,
+                "notional": 30250.0,
+                "side": "long",
+                "kind": "executed",
+                "source": "binance_ws",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    settings = SimpleNamespace(
+        liquidations={
+            "enabled": True,
+            "executed": {
+                "enabled": False,
+                "history_file": str(history),
+                "max_age_days": 14,
+            },
+            "projected": {"enabled": False},
+            "coinalyze": {"enabled": False},
+        }
+    )
+
+    liquidations = scan_module._fetch_liquidations_for_details(
+        {("BINANCE:BTCUSDT.P", "4h"): pd.DataFrame()},
+        settings,
+    )
+
+    frame = liquidations[("BINANCE:BTCUSDT.P", "4h")]
+    assert frame.iloc[0]["notional"] == 30250.0
+    assert frame.iloc[0]["side"] == "long"

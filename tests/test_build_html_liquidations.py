@@ -84,3 +84,44 @@ def test_build_html_shows_liquidated_long_and_short_dollar_totals():
     assert "$250K" in html
     assert "$900K" not in html
     assert "notional" not in html.lower()
+
+
+def test_load_liquidations_recovers_previous_embedded_amounts(tmp_path, monkeypatch):
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "index.html").write_text(
+        '<script>const LIQUIDATION_DATA = {"BINANCE:BTCUSDT.P":['
+        '{"timestamp":"2026-05-10T00:00:00Z","amount":120000,"side":"long"},'
+        '{"timestamp":"2026-05-10T00:01:00Z","amount":45000,"side":"short"}'
+        "]};</script>",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(build_html_module, "DOCS_DIR", docs_dir)
+    monkeypatch.setattr(build_html_module, "LIQUIDATIONS_DIR", tmp_path / "missing")
+
+    liquidations = build_html_module.load_liquidations()
+
+    assert liquidations["BINANCE:BTCUSDT.P"][0]["notional"] == 120000
+    assert liquidations["BINANCE:BTCUSDT.P"][1]["notional"] == 45000
+    assert all("notional" in row for row in liquidations["BINANCE:BTCUSDT.P"])
+
+
+def test_load_liquidations_can_use_ws_history_without_symbol_jsons(tmp_path, monkeypatch):
+    liquidations_dir = tmp_path / "liquidations"
+    liquidations_dir.mkdir()
+    (liquidations_dir / "_ws_history.jsonl").write_text(
+        '{"timestamp_ms":'
+        + str(int(build_html_module.pd.Timestamp.now(tz="UTC").timestamp() * 1000))
+        + ',"timestamp":"2026-05-10T00:00:00Z","symbol":"BTCUSDT",'
+        + '"price":60500,"quantity":0.5,"notional":30250,'
+        + '"side":"long","kind":"executed","source":"binance_ws"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(build_html_module, "LIQUIDATIONS_DIR", liquidations_dir)
+
+    liquidations = build_html_module.load_liquidations(
+        {"BINANCE:BTCUSDT.P": {"timeframe": "4h"}}
+    )
+
+    assert liquidations["BINANCE:BTCUSDT.P"][0]["notional"] == 30250
+    assert liquidations["BINANCE:BTCUSDT.P"][0]["side"] == "long"

@@ -58,6 +58,15 @@ jobs:
             charts-${{ github.ref_name }}-
             charts-
 
+      - name: Restore liquidation cache
+        uses: actions/cache@v4
+        with:
+          path: data/liquidations
+          key: liquidations-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            liquidations-${{ github.ref_name }}-
+            liquidations-
+
       - name: Collect liquidation burst (best-effort, public WS)
         continue-on-error: true
         timeout-minutes: 2
@@ -80,6 +89,8 @@ jobs:
           ls -lh docs/index.html
           echo "Slides: $(grep -c 'class=\"slide\"' docs/index.html)"
           echo "Chart JSON files: $([ -d data/charts ] && find data/charts -name '*.json' | wc -l || echo 0)"
+          echo "Liquidation JSON files: $([ -d data/liquidations ] && find data/liquidations -name '*.json' ! -name '_*' | wc -l || echo 0)"
+          echo "WS history lines: $([ -f data/liquidations/_ws_history.jsonl ] && wc -l < data/liquidations/_ws_history.jsonl || echo 0)"
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
