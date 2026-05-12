@@ -51,3 +51,36 @@ def test_build_html_embeds_liquidation_data_and_overlay_renderer():
     assert "Liquidations" in html
     assert '"kind":"projected"' in html
     assert '"kind":"executed"' in html
+
+
+def test_build_html_shows_liquidated_long_and_short_dollar_totals():
+    charts = {
+        "BINANCE:BTCUSDT.P": [
+            {
+                "timestamp": "2026-05-10 00:00:00+00:00",
+                "open": 60000,
+                "high": 62000,
+                "low": 59000,
+                "close": 61000,
+                "volume": 100,
+            }
+        ]
+    }
+    liquidations = {
+        "BINANCE:BTCUSDT.P": [
+            {"notional": 100000, "side": "long"},
+            {"notional": 250000, "side": "short"},
+            {"notional": 50000, "side": "long"},
+            {"notional": 900000, "side": "unknown"},
+            {"notional": 800000},
+        ]
+    }
+
+    html = build_html([], {}, charts=charts, liquidations=liquidations)
+
+    assert "Longs liquidated" in html
+    assert "Shorts liquidated" in html
+    assert "$150K" in html
+    assert "$250K" in html
+    assert "$900K" not in html
+    assert "notional" not in html.lower()

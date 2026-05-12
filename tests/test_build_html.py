@@ -50,3 +50,54 @@ def test_build_html_includes_explicit_wheel_and_touch_slide_navigation():
     assert "addEventListener('wheel'" in html
     assert "addEventListener('touchstart'" in html
     assert "addEventListener('touchend'" in html
+
+
+def test_build_html_handles_placeholder_metrics_and_renders_market_header():
+    charts = {
+        "BYBIT:ADAUSDT.P": [
+            {
+                "timestamp": "2026-05-12 00:00:00+00:00",
+                "open": 0.2700,
+                "high": 0.2820,
+                "low": 0.2600,
+                "close": 0.2798,
+                "volume": 100,
+            }
+        ]
+    }
+    scan = {
+        "BYBIT:ADAUSDT.P": {
+            "symbol": "BYBIT:ADAUSDT.P",
+            "exchange": "BYBIT",
+            "close": "0.2798",
+            "price_return_pct": "\u2014",
+            "early_bullish_score": "\u2014",
+            "blowoff_risk_score": "\u2014",
+            "oi_change_pct": "\u2014",
+            "funding_classification": "NEGATIVE",
+        }
+    }
+
+    html = build_html([], scan, charts=charts)
+
+    assert "$0.2798" in html
+    assert "+3.6%" in html
+    assert "Bull&nbsp;" not in html
+    assert "Risk&nbsp;" not in html
+    assert "OI&nbsp;" not in html
+    assert "NEGATIVE" not in html
+
+
+def test_build_html_daily_change_falls_back_to_scan_return_without_chart_ohlc():
+    scan = {
+        "BYBIT:BTCUSDT.P": {
+            "symbol": "BYBIT:BTCUSDT.P",
+            "exchange": "BYBIT",
+            "close": 81234.5,
+            "price_return_pct": -0.0123,
+        }
+    }
+
+    html = build_html([], scan, charts={})
+
+    assert "-1.2%" in html

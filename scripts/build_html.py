@@ -73,6 +73,8 @@ def load_liquidations() -> dict[str, list]:
     if not LIQUIDATIONS_DIR.exists():
         return liquidations
     for f in sorted(LIQUIDATIONS_DIR.glob("*.json")):
+        if f.name.startswith("_"):
+            continue
         try:
             obj = json.loads(f.read_text("utf-8"))
             sym = obj.get("symbol", "")
@@ -89,6 +91,20 @@ def load_liquidations() -> dict[str, list]:
 
 def esc(s: object) -> str:
     return html_mod.escape(str(s))
+
+
+def safe_float(value: object, default: float = 0.0) -> float:
+    try:
+        if value is None or pd.isna(value):
+            return default
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, str) and value.strip() in {"", "-", "—", "–", "â€”"}:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def score_color(score: float) -> str:
@@ -110,6 +126,7 @@ def funding_badge_class(fc: str) -> str:
 
 
 def format_price(close: float) -> str:
+    close = safe_float(close)
     if close >= 1_000:
         return f"${close:,.0f}"
     if close >= 1:
@@ -119,11 +136,54 @@ def format_price(close: float) -> str:
     return "—"
 
 
+def format_pct(value: object) -> str:
+    return f"{safe_float(value):+.1%}"
+
+
+def format_money(value: object) -> str:
+    amount = safe_float(value)
+    if amount >= 1_000_000_000:
+        return f"${amount / 1_000_000_000:.1f}B"
+    if amount >= 1_000_000:
+        return f"${amount / 1_000_000:.1f}M"
+    if amount >= 1_000:
+        return f"${amount / 1_000:.0f}K"
+    if amount > 0:
+        return f"${amount:,.0f}"
+    return "$0"
+
+
 def positive_float(value: object) -> bool:
-    try:
-        return float(value) > 0
-    except (TypeError, ValueError):
-        return False
+    return safe_float(value) > 0
+
+
+def daily_change_pct(scan_row: dict, candles: list | None) -> float:
+    if candles:
+        last = candles[-1] or {}
+        open_price = safe_float(last.get("open"))
+        close_price = safe_float(last.get("close"))
+        if open_price > 0 and close_price > 0:
+            return close_price / open_price - 1
+    return safe_float(scan_row.get("price_return_pct"))
+
+
+def liquidation_totals(rows: list | None) -> dict[str, float]:
+    totals = {"long": 0.0, "short": 0.0}
+    for row in rows or []:
+        side = str(row.get("side", "")).lower()
+        if side in totals:
+            totals[side] += safe_float(row.get("notional"))
+    return totals
+
+
+def rows_for_client(rows: list | None) -> list:
+    client_rows = []
+    for row in rows or []:
+        out = dict(row)
+        if "notional" in out:
+            out["amount"] = out.pop("notional")
+        client_rows.append(out)
+    return client_rows
 
 
 def row_from_event(event: dict) -> dict:
@@ -168,16 +228,16 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
 
     # Active signals from latest scan (sorted by score desc)
     active = [v for v in scan.values() if v.get("signal_active") or v.get("alert_triggered")]
-    active.sort(key=lambda r: float(r.get("early_bullish_score", 0)), reverse=True)
+    active.sort(key=lambda r: safe_float(r.get("early_bullish_score", 0)), reverse=True)
 
     signal_cards_html = ""
     if active:
         for row in active[:8]:
             sym   = esc(row.get("symbol", ""))
-            bull  = float(row.get("early_bullish_score", 0))
-            risk  = float(row.get("blowoff_risk_score", 0))
+            bull  = safe_float(row.get("early_bullish_score", 0))
+            risk  = safe_float(row.get("blowoff_risk_score", 0))
             fc    = str(row.get("funding_classification", "UNKNOWN"))
-            close = float(row.get("close", 0))
+            close = safe_float(row.get("close", 0))
             icon  = "🟢" if row.get("alert_triggered") else "🟡"
             slide_idx = symbol_to_slide.get(str(row.get("symbol", "")), -1)
             goto_attr = f'data-goto="{slide_idx}" style="cursor:pointer"' if slide_idx >= 0 else ""
@@ -205,8 +265,8 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
         et     = str(ev.get("event_type", ""))
         et_cls = "et-entry" if et == "ENTRY" else ("et-hot" if et == "HOT_PRE_ENTRY" else "et-pre")
         ts   = str(ev.get("timestamp", ""))[:10]
-        bull = float(ev.get("early_bullish_score", 0)) if ev.get("early_bullish_score") != "—" else 0.0
-        risk = float(ev.get("blowoff_risk_score", 0))  if ev.get("blowoff_risk_score")  != "—" else 0.0
+        bull = safe_float(ev.get("early_bullish_score", 0))
+        risk = safe_float(ev.get("blowoff_risk_score", 0))
         fc   = str(ev.get("funding_classification", ""))
 
         if slide_idx >= 0:
@@ -256,15 +316,12 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
     </section>"""
 
 
-def make_crypto_slide(idx: int, scan_row: dict) -> str:
+def make_crypto_slide(idx: int, scan_row: dict, candles: list | None = None, liquidation_rows: list | None = None) -> str:
     symbol   = str(scan_row.get("symbol", ""))
     exchange = str(scan_row.get("exchange", ""))
-    close    = float(scan_row.get("close", 0))
-    bull     = float(scan_row.get("early_bullish_score", 0))
-    risk     = float(scan_row.get("blowoff_risk_score", 0))
-    fc       = str(scan_row.get("funding_classification", "UNKNOWN"))
-    fr       = float(scan_row.get("funding_rate", 0))
-    oi_pct   = float(scan_row.get("oi_change_pct", 0))
+    close    = safe_float(scan_row.get("close", 0))
+    change   = daily_change_pct(scan_row, candles)
+    totals   = liquidation_totals(liquidation_rows)
 
     # Derive readable base name from symbol
     ticker = symbol.split(":")[-1].replace(".P", "")
@@ -288,10 +345,13 @@ def make_crypto_slide(idx: int, scan_row: dict) -> str:
         </div>
         <div class="crypto-meta">
           <span class="crypto-price">{esc(format_price(close))}</span>
-          <span class="metric-chip" style="color:{score_color(bull)}">Bull&nbsp;{bull:.0f}</span>
-          <span class="metric-chip" style="color:#f85149">Risk&nbsp;{risk:.0f}</span>
-          <span class="metric-chip" style="color:#8b949e">OI&nbsp;{oi_pct:+.1%}</span>
-          <span class="badge {funding_badge_class(fc)}">{esc(fc)}</span>
+          <span class="metric-chip change-chip">Day&nbsp;{esc(format_pct(change))}</span>
+          <table class="liq-summary">
+            <tbody>
+              <tr><th>Longs liquidated</th><td>{esc(format_money(totals["long"]))}</td></tr>
+              <tr><th>Shorts liquidated</th><td>{esc(format_money(totals["short"]))}</td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
       <div class="charts-grid">
@@ -370,6 +430,32 @@ html, body {
 .crypto-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .crypto-price { font-size: 15px; font-weight: 700; color: #58a6ff; }
 .metric-chip { font-size: 12px; font-weight: 600; white-space: nowrap; }
+.change-chip { color: #e6edf3; }
+.liq-summary {
+  border-collapse: collapse;
+  font-size: 10px;
+  line-height: 1.15;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.liq-summary th {
+  color: #8b949e;
+  font-weight: 600;
+  text-align: left;
+  padding: 2px 7px;
+  white-space: nowrap;
+}
+.liq-summary td {
+  color: #e6edf3;
+  font-weight: 700;
+  text-align: right;
+  padding: 2px 7px;
+  white-space: nowrap;
+}
+.liq-summary tr + tr th,
+.liq-summary tr + tr td { border-top: 1px solid #21262d; }
 
 /* ── Badges ── */
 .badge { padding: 2px 7px; border-radius: 12px; font-size: 10px; font-weight: 700; white-space: nowrap; }
@@ -569,7 +655,7 @@ STATIC_JS = r"""
       const xScale = chart.scales.x;
       const yScale = chart.scales.y;
       const area = chart.chartArea;
-      const maxNotional = Math.max(...rows.map(r => +(r.notional || 0)), 1);
+      const maxAmount = Math.max(...rows.map(r => +(r.amount || 0)), 1);
       const minX = xScale.min;
       const maxX = xScale.max;
       const fallbackX = area.left + (area.right - area.left) * 0.06;
@@ -577,13 +663,13 @@ STATIC_JS = r"""
       ctx.save();
       for (const row of rows) {
         const price = +(row.price || 0);
-        const notional = +(row.notional || 0);
-        if (!price || !notional) continue;
+        const amount = +(row.amount || 0);
+        if (!price || !amount) continue;
         const y = yScale.getPixelForValue(price);
         if (y < area.top || y > area.bottom) continue;
         const rawX = Date.parse(row.timestamp || '');
         const x = Number.isFinite(rawX) && rawX >= minX && rawX <= maxX ? xScale.getPixelForValue(rawX) : fallbackX;
-        const strength = Math.max(0.18, Math.min(0.85, notional / maxNotional));
+        const strength = Math.max(0.18, Math.min(0.85, amount / maxAmount));
         const isProjected = row.kind === 'projected';
         const color = row.side === 'short' ? '34,197,94' : row.side === 'long' ? '239,68,68' : '245,158,11';
         ctx.globalAlpha = isProjected ? 0.10 + strength * 0.28 : 0.16 + strength * 0.34;
@@ -754,7 +840,7 @@ def build_html(events: list[dict], scan: dict[str, dict], charts: dict[str, list
 
     slides: list[str] = [make_events_slide(events, slide_rows, {sym: i + 1 for i, sym in enumerate(valid_symbols)})]
     for i, sym in enumerate(valid_symbols, start=1):
-        slides.append(make_crypto_slide(i, slide_rows[sym]))
+        slides.append(make_crypto_slide(i, slide_rows[sym], charts.get(sym, []), liquidations.get(sym, [])))
 
     n = len(slides)
 
@@ -766,7 +852,8 @@ def build_html(events: list[dict], scan: dict[str, dict], charts: dict[str, list
 
     # Embed chart data as one JS global
     chart_data_json = json.dumps(charts, ensure_ascii=False, separators=(",", ":"))
-    liquidation_data_json = json.dumps(liquidations, ensure_ascii=False, separators=(",", ":"))
+    client_liquidations = {sym: rows_for_client(rows) for sym, rows in liquidations.items()}
+    liquidation_data_json = json.dumps(client_liquidations, ensure_ascii=False, separators=(",", ":"))
 
     slides_html = "\n".join(slides)
 
@@ -841,7 +928,7 @@ if __name__ == "__main__":
 
     size_kb = len(content.encode("utf-8")) // 1024
     n_charts = len(charts)
-    n_symbols = len([v for v in scan.values() if float(v.get("close", 0)) > 0])
+    n_symbols = len([v for v in scan.values() if safe_float(v.get("close", 0)) > 0])
     print(f"✅  Generated {out}")
     print(f"    Size:    {size_kb} KB")
     print(f"    Symbols: {n_symbols} (with data) / {len(scan)} total")
