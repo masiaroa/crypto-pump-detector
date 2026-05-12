@@ -20,3 +20,7 @@
 {"timestamp_ms":1778538537676,"price":0.01629,"quantity":14.0,"notional":0.22805999999999998,"side":"long","kind":"executed","source":"okx_ws","symbol":"HOME-USDT-SWAP"}
 {"timestamp_ms":1778538553508,"price":5.1656,"quantity":2.0,"notional":10.3312,"side":"short","kind":"executed","source":"okx_ws","symbol":"LAB-USDT-SWAP"}
 {"timestamp_ms":1778538553508,"price":5.1656,"quantity":2.0,"notional":10.3312,"side":"short","kind":"executed","source":"okx_ws","symbol":"LAB-USDT-SWAP"}
+{"timestamp_ms":1778598906911,"price":714.03,"quantity":1.9,"notional":1356.657,"side":"long","kind":"executed","source":"okx_ws","symbol":"MU-USDT-SWAP"}
+{"timestamp_ms":1778598910464,"price":713.74,"quantity":0.86,"notional":613.8164,"side":"long","kind":"executed","source":"okx_ws","symbol":"MU-USDT-SWAP"}
+{"timestamp_ms":1778598915112,"price":113.53,"quantity":0.1,"notional":11.353000000000002,"side":"long","kind":"executed","source":"okx_ws","symbol":"INTC-USDT-SWAP"}
+{"timestamp_ms":1778598922727,"price":84.03,"quantity":12272.0,"notional":1031216.16,"side":"long","kind":"executed","source":"okx_ws","symbol":"XAG-USDT-SWAP"}
