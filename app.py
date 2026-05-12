@@ -11,6 +11,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from pump_detector.config import ROOT, load_settings, load_watchlist
+from pump_detector.liquidations import fetch_liquidation_report
 from pump_detector.scanner import scan_watchlist
 from pump_detector.storage import read_recent_alerts
 
@@ -27,8 +28,14 @@ def _cached_scan_overview(symbols_tuple: tuple[str, ...], timeframe: str, persis
         alert_conditions=_settings_dict["alert_conditions"],
         thresholds=_settings_dict["thresholds"],
         storage=_settings_dict["storage"],
+        liquidations=_settings_dict.get("liquidations", {}),
     )
     return scan_watchlist(symbols=list(symbols_tuple), settings=s, persist=persist, limit=limit)
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+def _cached_liquidation_report(symbol: str, timeframe: str, _settings_dict: dict, _ts: int):
+    return fetch_liquidation_report(symbol, timeframe, settings=_settings_dict)
 
 
 def _cache_ts() -> int:
@@ -175,12 +182,22 @@ def main() -> None:
             run_selected = st.button("Actualizar seleccionado", type="primary", use_container_width=True)
             run_all = st.button("Actualizar toda la watchlist", use_container_width=True)
             force_refresh = st.button("🔄 Forzar refresco (borrar caché)", use_container_width=True)
+            refresh_liqs = st.button(
+                "↻ Reconsultar liquidaciones historicas",
+                use_container_width=True,
+                help="Borra la cache de Coinalyze y vuelve a consultar el historico agregado.",
+            )
 
     # Force cache clear
     if force_refresh:
         _cached_scan_overview.clear()
+        _cached_liquidation_report.clear()
         st.session_state.pop("scan_result", None)
         st.toast("Caché borrada. Reescaneando...", icon="🔄")
+
+    if refresh_liqs:
+        _cached_liquidation_report.clear()
+        st.toast("Cache de liquidaciones historicas borrada.", icon="↻")
 
     pending_tf = st.session_state.pop("pending_timeframe", None)
     if pending_tf:
@@ -195,6 +212,7 @@ def main() -> None:
         "alert_conditions": settings.alert_conditions,
         "thresholds": settings.thresholds,
         "storage": settings.storage,
+        "liquidations": settings.liquidations,
     }
 
     if run_all or force_refresh:
@@ -223,6 +241,7 @@ def main() -> None:
             alert_conditions=settings.alert_conditions,
             thresholds=settings.thresholds,
             storage=settings.storage,
+            liquidations=settings.liquidations,
         )
         with st.spinner(f"Actualizando {_coin_label(selected_symbol)}..."):
             st.session_state.scan_result = scan_watchlist(symbols=[selected_symbol], settings=active_settings, persist=False, limit=limit)
@@ -245,7 +264,7 @@ def main() -> None:
     if selected_key not in available and available:
         selected_key = available[0]
     symbol, timeframe = selected_key.split(" | ", 1)
-    _detail(symbol, timeframe, df, details)
+    _detail(symbol, timeframe, df, details, settings)
 
 
 # ---------------------------------------------------------------------------
@@ -466,7 +485,7 @@ def _safe_filter_or(candles, *cols: str):
     return candles[mask]
 
 
-def _detail(symbol: str, timeframe: str, df, details) -> None:
+def _detail(symbol: str, timeframe: str, df, details, settings) -> None:
     row = df[(df["symbol"] == symbol) & (df["timeframe"] == timeframe)].iloc[0]
     title_col, tf_col = st.columns([0.72, 0.28])
     with title_col:
@@ -498,11 +517,14 @@ def _detail(symbol: str, timeframe: str, df, details) -> None:
         st.warning("No hay serie historica disponible para este simbolo/timeframe.")
         return
 
-
     events = _safe_filter(candles, "signal_active_flag")
     pre_alerts = _safe_filter(candles, "pre_alert_flag")
     hot_pre_alerts = _safe_filter(candles, "hot_pre_entry_flag")
     impulses = _safe_filter_or(candles, "price_impulse_flag", "oi_impulse_flag").tail(12)
+    liquidations, liq_diagnostics = _cached_liquidation_report(
+        symbol, timeframe, settings.liquidations, _cache_ts()
+    )
+    _render_liquidation_status(symbol, timeframe, liquidations, liq_diagnostics, candles)
 
     fig = make_subplots(
         rows=4,
@@ -512,6 +534,7 @@ def _detail(symbol: str, timeframe: str, df, details) -> None:
         row_heights=[0.52, 0.18, 0.15, 0.15],
         subplot_titles=("Price + SMA200 + senales", "Open Interest", "Funding Rate", "Volume"),
     )
+    _add_liquidation_overlay(fig, candles, liquidations)
     fig.add_trace(
         go.Candlestick(
             x=candles["timestamp"],
@@ -680,6 +703,246 @@ def _add_oi_candles(fig, candles, timeframe: str) -> None:
     if pd.notna(oi_min) and pd.notna(oi_max) and oi_max > oi_min:
         padding = max((oi_max - oi_min) * 0.15, oi_max * 0.01)
         fig.update_yaxes(range=[oi_min - padding, oi_max + padding], row=2, col=1)
+
+
+def _render_liquidation_status(symbol: str, timeframe: str, liquidations, diagnostics, candles=None) -> None:
+    diagnostic = next((d for d in diagnostics if getattr(d, "provider", "") == "coinalyze"), None)
+    if diagnostic is None:
+        st.info(
+            "Liquidaciones historicas: Coinalyze no esta activo para este simbolo. "
+            "Los mapas de liquidaciones pendientes no se muestran en modo gratis."
+        )
+        return
+
+    coin = _coin_label(symbol)
+    if diagnostic.status == "ok":
+        status_text, freshness = _liquidation_freshness(diagnostic.last_timestamp, timeframe)
+        cols = st.columns(4)
+        cols[0].metric("Coinalyze", status_text, diagnostic.resolved_symbol or coin)
+        cols[1].metric("Filas", f"{diagnostic.rows:,}".replace(",", "."))
+        cols[2].metric("Nocional", _format_notional(diagnostic.notional))
+        cols[3].metric("Ultimo bucket", _format_ts(diagnostic.last_timestamp), freshness)
+        side_summary, winner, ratio = _liquidation_side_summary(liquidations, candles)
+        if not side_summary.empty:
+            st.caption(f"Balance historico: {winner} ({ratio}).")
+            st.dataframe(side_summary, hide_index=True, use_container_width=True)
+        st.caption(
+            "Historico ejecutado agregado por Coinalyze. "
+            "Liquidaciones pendientes por nivel: no disponible con una fuente gratis fiable."
+        )
+        return
+
+    message = _coinalyze_status_message(diagnostic)
+    if diagnostic.status in {"missing_key", "disabled", "empty"}:
+        st.info(message)
+    else:
+        st.warning(message)
+
+
+def _coinalyze_status_message(diagnostic) -> str:
+    if diagnostic.status == "missing_key":
+        return "Liquidaciones historicas: falta COINALYZE_API_KEY en el entorno o .env."
+    if diagnostic.status == "disabled":
+        return "Liquidaciones historicas: Coinalyze esta desactivado en settings.yaml."
+    if diagnostic.status == "empty":
+        resolved = f" ({diagnostic.resolved_symbol})" if diagnostic.resolved_symbol else ""
+        return f"Liquidaciones historicas: Coinalyze respondio OK{resolved}, pero no devolvio filas."
+    if diagnostic.status == "http_error":
+        return f"Liquidaciones historicas: Coinalyze devolvio HTTP {diagnostic.http_status}."
+    if diagnostic.status == "symbol_unresolved":
+        return "Liquidaciones historicas: no se pudo mapear este simbolo a Coinalyze."
+    if diagnostic.status == "request_error":
+        return diagnostic.message or "Liquidaciones historicas: error consultando Coinalyze."
+    return diagnostic.message or "Liquidaciones historicas: estado desconocido."
+
+
+def _liquidation_freshness(timestamp, timeframe: str) -> tuple[str, str]:
+    if timestamp is None or pd.isna(timestamp):
+        return "OK", ""
+    ts = pd.to_datetime(timestamp, utc=True)
+    age = pd.Timestamp.now(tz="UTC") - ts
+    stale_after = {
+        "1h": pd.Timedelta(hours=2),
+        "4h": pd.Timedelta(hours=6),
+        "1d": pd.Timedelta(hours=36),
+    }.get(timeframe, pd.Timedelta(hours=6))
+    status = "OK" if age <= stale_after else "Antiguo"
+    return status, f"hace {_format_age(age)}"
+
+
+def _format_age(delta: pd.Timedelta) -> str:
+    total_minutes = max(int(delta.total_seconds() // 60), 0)
+    hours, minutes = divmod(total_minutes, 60)
+    if hours >= 48:
+        days, rem_hours = divmod(hours, 24)
+        return f"{days}d {rem_hours}h"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
+
+
+def _format_ts(timestamp) -> str:
+    if timestamp is None or pd.isna(timestamp):
+        return "n/a"
+    return pd.to_datetime(timestamp, utc=True).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _format_notional(value: float) -> str:
+    if value >= 1_000_000:
+        return f"${value / 1_000_000:.2f}M"
+    if value >= 1_000:
+        return f"${value / 1_000:.1f}K"
+    return f"${value:.0f}"
+
+
+def _liquidation_side_summary(liquidations, candles=None) -> tuple[pd.DataFrame, str, str]:
+    if liquidations is None or liquidations.empty:
+        return pd.DataFrame(), "Sin datos", "0.00x"
+    frame = liquidations.copy()
+    if "source" in frame.columns:
+        frame = frame[frame["source"] == "coinalyze"]
+    if candles is not None and not candles.empty and "timestamp" in frame.columns:
+        frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
+        candle_ts = pd.to_datetime(candles["timestamp"], utc=True, errors="coerce").dropna()
+        if not candle_ts.empty:
+            start = candle_ts.min()
+            end = candle_ts.max()
+            frame = frame[(frame["timestamp"] >= start) & (frame["timestamp"] <= end)]
+    frame = frame[frame.get("side").isin(["long", "short"])]
+    if frame.empty:
+        return pd.DataFrame(), "Sin datos", "0.00x"
+
+    totals = frame.groupby("side")["notional"].sum()
+    long_total = float(totals.get("long", 0.0))
+    short_total = float(totals.get("short", 0.0))
+    total = long_total + short_total
+    if total <= 0:
+        return pd.DataFrame(), "Sin datos", "0.00x"
+
+    if abs(long_total - short_total) < 1e-9:
+        winner = "Empate"
+        ratio = "1.00x"
+    elif long_total > short_total:
+        winner = "Longs mas liquidados"
+        ratio = f"{long_total / max(short_total, 1.0):.2f}x"
+    else:
+        winner = "Shorts mas liquidados"
+        ratio = f"{short_total / max(long_total, 1.0):.2f}x"
+
+    rows = [
+        {
+            "Lado": "Longs liquidados",
+            "Nocional": _format_notional(long_total),
+            "%": f"{(long_total / total) * 100:.1f}%",
+        },
+        {
+            "Lado": "Shorts liquidados",
+            "Nocional": _format_notional(short_total),
+            "%": f"{(short_total / total) * 100:.1f}%",
+        },
+    ]
+    return pd.DataFrame(rows), winner, ratio
+
+
+def _add_liquidation_overlay(fig, candles, liquidations) -> None:
+    if liquidations is None or liquidations.empty:
+        return
+    frame = liquidations.copy()
+    frame["timestamp"] = pd.to_datetime(
+        frame["timestamp"], utc=True, errors="coerce"
+    ).astype("datetime64[ns, UTC]")
+    frame = frame.dropna(subset=["timestamp"])
+    if frame.empty:
+        return
+
+    # Aggregated providers (Coinalyze) return bucket rows without a price
+    # level. Snap NaN/zero prices to the candle close at that timestamp so
+    # the chart can still plot them.
+    if "price" in frame.columns and not candles.empty:
+        candle_ref = (
+            candles[["timestamp", "close"]]
+            .dropna(subset=["timestamp", "close"])
+            .copy()
+        )
+        candle_ref["timestamp"] = pd.to_datetime(
+            candle_ref["timestamp"], utc=True, errors="coerce"
+        ).astype("datetime64[ns, UTC]")
+        candle_ref = candle_ref.dropna(subset=["timestamp"]).sort_values("timestamp")
+        if not candle_ref.empty:
+            missing = frame["price"].isna() | (frame["price"] <= 0)
+            if missing.any():
+                lookup = (
+                    frame.loc[missing, ["timestamp"]]
+                    .reset_index()
+                    .sort_values("timestamp")
+                )
+                snapped = pd.merge_asof(
+                    lookup,
+                    candle_ref,
+                    on="timestamp",
+                    direction="nearest",
+                )
+                idx = snapped["index"].to_numpy()
+                values = snapped["close"].to_numpy()
+                frame.loc[idx, "price"] = values
+
+    frame = frame.dropna(subset=["price"])
+    if frame.empty:
+        return
+
+    low = float(candles["low"].min())
+    high = float(candles["high"].max())
+    frame = frame[(frame["price"] >= low * 0.98) & (frame["price"] <= high * 1.02)]
+    if frame.empty:
+        return
+
+    projected = frame[frame["kind"] == "projected"]
+    if not projected.empty:
+        max_notional = max(float(projected["notional"].max()), 1.0)
+        fig.add_trace(
+            go.Scatter(
+                x=projected["timestamp"],
+                y=projected["price"],
+                mode="markers",
+                name="Projected liquidations",
+                marker=dict(
+                    color=projected["notional"],
+                    colorscale="YlOrRd",
+                    cmin=0,
+                    cmax=max_notional,
+                    size=18,
+                    symbol="square",
+                    opacity=0.28,
+                    line=dict(width=0),
+                ),
+                customdata=projected[["notional", "side", "source"]],
+                hovertemplate="Projected liquidation zone<br>%{x}<br>price=%{y:.6g}<br>notional=%{customdata[0]:,.0f}<br>side=%{customdata[1]}<br>source=%{customdata[2]}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
+
+    executed = frame[frame["kind"] == "executed"]
+    if not executed.empty:
+        sizes = executed["notional"].clip(lower=0)
+        if sizes.max() > sizes.min():
+            sizes = 8 + ((sizes - sizes.min()) / (sizes.max() - sizes.min())) * 18
+        else:
+            sizes = pd.Series([10] * len(executed), index=executed.index)
+        colors = executed["side"].map({"long": "#ef4444", "short": "#22c55e"}).fillna("#f59e0b")
+        fig.add_trace(
+            go.Scatter(
+                x=executed["timestamp"],
+                y=executed["price"],
+                mode="markers",
+                name="Executed liquidations",
+                marker=dict(color=colors, size=sizes, opacity=0.45, symbol="circle"),
+                customdata=executed[["notional", "quantity", "side", "source"]],
+                hovertemplate="Executed liquidation<br>%{x}<br>price=%{y:.6g}<br>notional=%{customdata[0]:,.0f}<br>qty=%{customdata[1]:.6g}<br>side=%{customdata[2]}<br>source=%{customdata[3]}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
 
 
 def _selected_symbol(event, table, available: list[str]) -> str | None:

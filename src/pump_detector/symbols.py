@@ -46,7 +46,7 @@ def _split_symbol(raw: str) -> tuple[str, str]:
 
 
 def _split_base_quote(ticker: str) -> tuple[str, str]:
-    match = re.match(r"^(.+?)(USDT|USD|USDC)$", ticker.upper())
+    match = re.match(r"^(.+?)(USDT|USDC|BUSD|USD)$", ticker.upper())
     if not match:
         return ticker.upper(), ""
     return match.group(1), match.group(2)

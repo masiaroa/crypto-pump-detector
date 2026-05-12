@@ -35,3 +35,19 @@ def test_scan_timeframe_env_empty_string_is_ignored(monkeypatch):
 def test_valid_timeframes_constant():
     assert VALID_TIMEFRAMES == {"1h", "4h", "1d"}
 
+
+def test_load_settings_includes_liquidation_defaults(monkeypatch):
+    monkeypatch.delenv("SCAN_TIMEFRAME", raising=False)
+    settings = load_settings()
+
+    assert settings.liquidations["enabled"] is True
+    assert settings.liquidations["executed"]["providers"] == ["binance_ws", "bybit_ws", "okx_ws"]
+    assert settings.liquidations["executed"]["enabled"] is False
+    assert settings.liquidations["executed"]["burst_seconds"] == 30
+    assert settings.liquidations["executed"]["history_file"].endswith("_ws_history.jsonl")
+    assert settings.liquidations["executed"]["auto_burst_on_startup"] is False
+    assert settings.liquidations["projected"]["enabled"] is False
+    assert settings.liquidations["projected"]["use_frontend_endpoint"] is False
+    assert settings.liquidations["projected"]["require_paid"] is False
+    assert settings.liquidations["coinalyze"]["enabled"] is True
+

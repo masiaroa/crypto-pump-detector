@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
+except ImportError:  # pragma: no cover
+    pass
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -21,6 +27,7 @@ class Settings:
     alert_conditions: dict[str, Any]
     thresholds: dict[str, Any]
     storage: dict[str, Any]
+    liquidations: dict[str, Any] = field(default_factory=dict)
 
 
 DEFAULT_SETTINGS = {
@@ -50,6 +57,31 @@ DEFAULT_SETTINGS = {
         "sqlite_path": "data/signals.sqlite",
         "alerts_csv": "data/alerts.csv",
     },
+        "liquidations": {
+            "enabled": True,
+            "executed": {
+                "enabled": False,
+                "providers": ["binance_ws", "bybit_ws", "okx_ws"],
+                "burst_seconds": 30,
+                "history_file": "data/liquidations/_ws_history.jsonl",
+                "max_age_days": 14,
+                "auto_burst_on_startup": False,
+                "auto_burst_seconds": 20,
+                "auto_burst_min_interval_minutes": 5,
+            },
+            "projected": {
+                # Disabled by default: pending liquidation maps do not have a
+                # reliable free source. CoinGlass Liquidation Map requires a key.
+                "enabled": False,
+                "provider": "coinglass",
+                "use_frontend_endpoint": False,
+                "require_paid": False,
+            },
+            "coinalyze": {
+                # Main historical source. Requires COINALYZE_API_KEY.
+                "enabled": True,
+            },
+        },
 }
 
 
@@ -84,6 +116,7 @@ def load_settings(path: Path | None = None) -> Settings:
         alert_conditions=dict(merged["alert_conditions"]),
         thresholds=dict(merged["thresholds"]),
         storage=dict(merged["storage"]),
+        liquidations=dict(merged["liquidations"]),
     )
 
 

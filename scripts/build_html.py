@@ -23,6 +23,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 CHARTS_DIR = DATA_DIR / "charts"
+LIQUIDATIONS_DIR = DATA_DIR / "liquidations"
 DOCS_DIR = ROOT / "docs"
 
 
@@ -64,6 +65,22 @@ def load_charts() -> dict[str, list]:
         except Exception:
             pass
     return charts
+
+
+def load_liquidations() -> dict[str, list]:
+    """Returns {symbol: [liquidation_dict, ...]} for static overlays."""
+    liquidations: dict[str, list] = {}
+    if not LIQUIDATIONS_DIR.exists():
+        return liquidations
+    for f in sorted(LIQUIDATIONS_DIR.glob("*.json")):
+        try:
+            obj = json.loads(f.read_text("utf-8"))
+            sym = obj.get("symbol", "")
+            data = obj.get("data", [])
+            liquidations[sym] = data[-250:] if len(data) > 250 else data
+        except Exception:
+            pass
+    return liquidations
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +296,7 @@ def make_crypto_slide(idx: int, scan_row: dict) -> str:
       </div>
       <div class="charts-grid">
         <div class="chart-box">
-          <div class="chart-label">Price (close)</div>
+          <div class="chart-label">Price + Liquidations</div>
           <canvas id="price-{canvas_id}"></canvas>
         </div>
         <div class="chart-box">
@@ -544,8 +561,48 @@ STATIC_JS = r"""
     grid:  { color: 'rgba(48,54,61,0.6)' },
   };
 
+  const liquidationOverlayPlugin = {
+    id: 'liquidationOverlayPlugin',
+    beforeDatasetsDraw(chart, args, opts) {
+      const rows = (opts && opts.rows) || [];
+      if (!rows.length) return;
+      const xScale = chart.scales.x;
+      const yScale = chart.scales.y;
+      const area = chart.chartArea;
+      const maxNotional = Math.max(...rows.map(r => +(r.notional || 0)), 1);
+      const minX = xScale.min;
+      const maxX = xScale.max;
+      const fallbackX = area.left + (area.right - area.left) * 0.06;
+      const ctx = chart.ctx;
+      ctx.save();
+      for (const row of rows) {
+        const price = +(row.price || 0);
+        const notional = +(row.notional || 0);
+        if (!price || !notional) continue;
+        const y = yScale.getPixelForValue(price);
+        if (y < area.top || y > area.bottom) continue;
+        const rawX = Date.parse(row.timestamp || '');
+        const x = Number.isFinite(rawX) && rawX >= minX && rawX <= maxX ? xScale.getPixelForValue(rawX) : fallbackX;
+        const strength = Math.max(0.18, Math.min(0.85, notional / maxNotional));
+        const isProjected = row.kind === 'projected';
+        const color = row.side === 'short' ? '34,197,94' : row.side === 'long' ? '239,68,68' : '245,158,11';
+        ctx.globalAlpha = isProjected ? 0.10 + strength * 0.28 : 0.16 + strength * 0.34;
+        ctx.fillStyle = 'rgba(' + color + ',1)';
+        if (isProjected) {
+          ctx.fillRect(area.left, y - 1.5, area.right - area.left, 3);
+        } else {
+          const radius = 3 + strength * 8;
+          ctx.beginPath();
+          ctx.arc(x, y, radius, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+    }
+  };
+
   // ── Japanese candlestick chart (price or OI) ─────────────────────────────
-  function candleChart(id, candleData) {
+  function candleChart(id, candleData, liquidationRows) {
     const canvas = document.getElementById(id);
     if (!canvas || !candleData.length) return;
     new Chart(canvas.getContext('2d'), {
@@ -562,6 +619,7 @@ STATIC_JS = r"""
         animation: { duration: 200 },
         plugins: {
           legend: { display: false },
+          liquidationOverlayPlugin: { rows: liquidationRows || [] },
           tooltip: {
             callbacks: {
               label: (ctx) => {
@@ -576,6 +634,7 @@ STATIC_JS = r"""
         },
         scales: { x: deepClone(SCALE_X_TIME), y: deepClone(SCALE_Y) },
       },
+      plugins: liquidationRows && liquidationRows.length ? [liquidationOverlayPlugin] : [],
     });
   }
 
@@ -620,6 +679,7 @@ STATIC_JS = r"""
     const symbol = slideEl.dataset.symbol;
     const raw    = (typeof CHART_DATA !== 'undefined') ? CHART_DATA[symbol] : null;
     if (!raw || !raw.length) return;
+    const liqs   = (typeof LIQUIDATION_DATA !== 'undefined') ? (LIQUIDATION_DATA[symbol] || []) : [];
 
     const id  = 's' + idx;
     const vol = raw.map(d => +(d.volume || 0));
@@ -630,7 +690,7 @@ STATIC_JS = r"""
     const priceCandles = raw
       .filter(d => +d.open && +d.high && +d.low && +d.close)
       .map(d => ({ x: Date.parse(d.timestamp), o: +d.open, h: +d.high, l: +d.low, c: +d.close }));
-    candleChart('price-' + id, priceCandles);
+    candleChart('price-' + id, priceCandles, liqs);
 
     // OI candlestick — uses oi_open/high/low/close when available
     const hasOiOhlc = raw.some(d => +d.oi_open > 0);
@@ -638,7 +698,7 @@ STATIC_JS = r"""
       const oiCandles = raw
         .filter(d => +d.oi_open > 0)
         .map(d => ({ x: Date.parse(d.timestamp), o: +d.oi_open, h: +d.oi_high, l: +d.oi_low, c: +(d.oi_close || d.open_interest) }));
-      candleChart('oi-' + id, oiCandles);
+      candleChart('oi-' + id, oiCandles, []);
     } else {
       // Fallback: simple line with open_interest
       const oiVals = raw.map(d => +(d.open_interest || 0));
@@ -661,7 +721,8 @@ STATIC_JS = r"""
 # HTML assembly
 # ---------------------------------------------------------------------------
 
-def build_html(events: list[dict], scan: dict[str, dict], charts: dict[str, list]) -> str:
+def build_html(events: list[dict], scan: dict[str, dict], charts: dict[str, list], liquidations: dict[str, list] | None = None) -> str:
+    liquidations = liquidations or {}
     fallback_rows: dict[str, dict] = {}
     for symbol, candles in charts.items():
         if candles:
@@ -705,6 +766,7 @@ def build_html(events: list[dict], scan: dict[str, dict], charts: dict[str, list
 
     # Embed chart data as one JS global
     chart_data_json = json.dumps(charts, ensure_ascii=False, separators=(",", ":"))
+    liquidation_data_json = json.dumps(liquidations, ensure_ascii=False, separators=(",", ":"))
 
     slides_html = "\n".join(slides)
 
@@ -754,6 +816,7 @@ def build_html(events: list[dict], scan: dict[str, dict], charts: dict[str, list
 
   <!-- Embedded chart data -->
   <script>const CHART_DATA = {chart_data_json};</script>
+  <script>const LIQUIDATION_DATA = {liquidation_data_json};</script>
 
   <!-- App logic (keyboard nav, IntersectionObserver, chart init) -->
   <script>{STATIC_JS}</script>
@@ -769,9 +832,10 @@ if __name__ == "__main__":
     events = load_events()
     scan   = load_scan()
     charts = load_charts()
+    liquidations = load_liquidations()
 
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
-    content = build_html(events, scan, charts)
+    content = build_html(events, scan, charts, liquidations)
     out = DOCS_DIR / "index.html"
     out.write_text(content, encoding="utf-8")
 
@@ -782,5 +846,6 @@ if __name__ == "__main__":
     print(f"    Size:    {size_kb} KB")
     print(f"    Symbols: {n_symbols} (with data) / {len(scan)} total")
     print(f"    Charts:  {n_charts} series")
+    print(f"    Liqs:    {len(liquidations)} series")
     print(f"    Events:  {len(events)}")
 

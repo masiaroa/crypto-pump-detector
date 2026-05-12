@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 
 from pump_detector.config import ROOT, load_settings, load_watchlist
+from pump_detector.liquidations import collect_executed_burst, fetch_liquidation_map
 from pump_detector.scanner import scan_watchlist
 
 
@@ -34,6 +35,81 @@ def _export_charts(details: dict, charts_dir: Path) -> None:
         }
         fname = _sanitize_key(raw_symbol, timeframe) + ".json"
         (charts_dir / fname).write_text(json.dumps(out), encoding="utf-8")
+
+
+def _export_liquidations(liquidations: dict, liquidations_dir: Path) -> None:
+    """Export per-symbol liquidation map data to JSON files for the HTML dashboard."""
+    liquidations_dir.mkdir(parents=True, exist_ok=True)
+    for (raw_symbol, timeframe), df in liquidations.items():
+        if df is None or df.empty:
+            continue
+        subset = df.copy()
+        if "timestamp" in subset.columns:
+            subset["timestamp"] = subset["timestamp"].astype(str)
+        out = {
+            "symbol": raw_symbol,
+            "timeframe": timeframe,
+            "data": subset.fillna(0).to_dict(orient="records"),
+        }
+        fname = _sanitize_key(raw_symbol, timeframe) + ".json"
+        (liquidations_dir / fname).write_text(json.dumps(out), encoding="utf-8")
+
+
+def _fetch_liquidations_for_details(details: dict, settings) -> dict:
+    rows = {}
+    for raw_symbol, timeframe in details:
+        frame = fetch_liquidation_map(raw_symbol, timeframe, settings=settings.liquidations)
+        if not frame.empty:
+            rows[(raw_symbol, timeframe)] = frame
+    return rows
+
+
+def _run_liquidation_burst(settings) -> int:
+    """Run a short WS burst before fetching per-symbol liquidations.
+
+    The burst is best-effort: any collector failure is swallowed and the
+    scan continues with whatever JSONL history already exists on disk.
+    """
+    import os
+
+    liq_cfg = settings.liquidations or {}
+    if not liq_cfg.get("enabled", True):
+        return 0
+    executed_cfg = liq_cfg.get("executed") or {}
+    if not executed_cfg.get("enabled", True):
+        return 0
+    duration = float(executed_cfg.get("burst_seconds") or 0)
+    # Env override: SCAN_BURST_SECONDS=0 disables the burst entirely,
+    # SCAN_BURST_SECONDS=10 shortens it.
+    env_burst = os.environ.get("SCAN_BURST_SECONDS", "").strip()
+    if env_burst:
+        try:
+            duration = float(env_burst)
+        except ValueError:
+            pass
+    if duration <= 0:
+        return 0
+    providers = [
+        p
+        for p in executed_cfg.get("providers", ["binance_ws", "bybit_ws", "okx_ws"])
+        if str(p).endswith("_ws")
+    ]
+    if not providers:
+        return 0
+    history_file = executed_cfg.get("history_file") or "data/liquidations/_ws_history.jsonl"
+    out_path = Path(history_file)
+    if not out_path.is_absolute():
+        out_path = ROOT / out_path
+    try:
+        return collect_executed_burst(
+            duration_s=duration,
+            exchanges=providers,
+            out_path=out_path,
+            max_age_days=int(executed_cfg.get("max_age_days") or 14),
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"liquidation burst skipped: {exc}")
+        return 0
 
 
 def _export_event_history(details: dict, history_path: Path) -> None:
@@ -96,6 +172,15 @@ if __name__ == "__main__":
 
     # Chart data for the HTML dashboard
     _export_charts(details, ROOT / "data" / "charts")
+
+    # Liquidation overlays for the HTML dashboard. The WS burst runs first so
+    # the per-symbol read below can find fresh executed liquidations. Missing
+    # or blocked sources degrade to empty output so GitHub Pages still builds.
+    burst_written = _run_liquidation_burst(settings)
+    if burst_written:
+        print(f"liquidation burst: wrote {burst_written} records")
+    liquidation_details = _fetch_liquidations_for_details(details, settings)
+    _export_liquidations(liquidation_details, ROOT / "data" / "liquidations")
 
     # Event history (used by both app.py and build_html.py)
     _export_event_history(details, ROOT / "data" / "event_history.csv")

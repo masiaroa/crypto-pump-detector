@@ -36,7 +36,15 @@ crypto-pump-detector/
         ├── scanner.py      # scan_watchlist(), scan_to_csv()
         ├── signals.py      # SignalSnapshot, compute_indicators(), mark_signal_history(), evaluate_latest()
         ├── storage.py      # append_snapshots() → SQLite + CSV
-        └── symbols.py      # normalize_symbol() → MarketInfo
+        ├── symbols.py      # normalize_symbol() → MarketInfo
+        └── liquidations/   # Overlay gratis de liquidaciones (ver más abajo)
+            ├── __init__.py             # API pública (fetch_liquidation_map, collect_executed_burst, …)
+            ├── schema.py               # LIQUIDATION_COLUMNS, empty_liquidations(), helpers
+            ├── executed_store.py       # JSONL rolling + filtro por símbolo/ventana
+            ├── executed_ws.py          # Colector WS Binance/Bybit/OKX (CLI: python -m …)
+            ├── projected_coinglass.py  # Endpoint frontend público de CoinGlass (sin key)
+            ├── coinalyze.py            # Histórico agregado vía Coinalyze (free API key)
+            └── fetch.py                # Orquestador executed + projected + coinalyze
 ```
 
 ---
@@ -85,11 +93,20 @@ pip install -r requirements.txt
 # Tests
 pytest -q
 
-# Escaneo CLI (genera data/latest_scan.csv, signals.sqlite, alerts.csv)
+# Escaneo CLI (genera data/latest_scan.csv, signals.sqlite, alerts.csv
+# + data/liquidations/*.json; el propio scan dispara un burst WS de ~60s
+# para llenar data/liquidations/_ws_history.jsonl)
 PYTHONPATH=src python scripts/scan.py
+
+# Burst WS suelto (sin pasar por el scan completo)
+PYTHONPATH=src python -m pump_detector.liquidations.executed_ws \
+  --duration 60 --out data/liquidations/_ws_history.jsonl
 
 # Dashboard interactivo
 PYTHONPATH=src streamlit run app.py
+
+# Build estático del dashboard (lo que usa GitHub Pages)
+PYTHONPATH=src python scripts/build_html.py
 ```
 
 ---
@@ -150,6 +167,72 @@ thresholds:
 storage:
   sqlite_path: data/signals.sqlite
   alerts_csv: data/alerts.csv
+
+liquidations:
+  enabled: true
+  executed:
+    enabled: true
+    providers: [binance_ws, bybit_ws, okx_ws]
+    burst_seconds: 60                              # 0 = desactiva el burst en el scan
+    history_file: data/liquidations/_ws_history.jsonl
+    max_age_days: 14                               # prune al inicio de cada burst
+  projected:
+    enabled: true
+    provider: coinglass
+    use_frontend_endpoint: true                    # scrape público sin key
+    require_paid: false
+  coinalyze:
+    enabled: true                                  # fetch silencioso si no hay key
+```
+
+> **Para ver liquidaciones históricas de SAND (o cualquier altcoin):**
+> 1. Crea cuenta en https://coinalyze.net y genera key en /account/api-key/
+> 2. `export COINALYZE_API_KEY=...` antes de `streamlit run app.py` o `scripts/scan.py`
+> 3. El chart pintará longs (rojo) y shorts (verde) agregados por intervalo. Sin key se omite silenciosamente y se cae al historial WS local.
+
+---
+
+## Overlay de liquidaciones (gratis, sin API key)
+
+Objetivo: pintar capa de liquidaciones sobre el gráfico de precio sin depender de planes de pago.
+
+| Capa | Fuente | Coste |
+|------|--------|-------|
+| `executed` (live) | WebSockets públicos: Binance `!forceOrder@arr` (USDM + COIN-M), Bybit `allLiquidation.linear`, OKX `liquidation-orders` | 0 € |
+| `executed` (histórico) | Coinalyze `/v1/liquidation-history` con `COINALYZE_API_KEY` (registro gratis en https://coinalyze.net/account/api-key/). Agregados por intervalo (long $ / short $) — el chart snapea precio al close de la vela. | 0 € |
+| `projected` | Endpoint frontend público de CoinGlass (`fapi.coinglass.com/api/futures/liquidation/aggregated-heatmap`). Si existe `COINGLASS_API_KEY` se intenta primero la API oficial y se cae al frontend si falla. CoinGlass cerró el free tier en 2025-Q4 → desactivado por defecto. | 0 € (roto) |
+
+Flujo:
+
+1. `scripts/scan.py` invoca `collect_executed_burst()` antes del bucle de detalles → abre los WS en paralelo durante `burst_seconds`, normaliza eventos al schema común y los appendiza a `_ws_history.jsonl` (con `flock`).
+2. Para cada símbolo del watchlist, `fetch_liquidation_map()` lee del JSONL (filtrado por símbolo canónico + ventana del timeframe) y, en paralelo, pide el heatmap projected.
+3. `_export_liquidations()` escribe `data/liquidations/{EXCHANGE}_{TICKER}_{TF}.json` que consumen tanto Streamlit como `scripts/build_html.py`.
+
+Schema común (`LIQUIDATION_COLUMNS`):
+
+```text
+timestamp, price, quantity, notional, side, kind, source
+```
+
+- `side`: `long` (posición long liquidada → orden SELL) / `short` / `unknown`
+- `kind`: `executed` / `projected`
+- `source`: `binance_ws` / `bybit_ws` / `okx_ws` / `coinglass` / `coinglass_frontend`
+
+Fallback silencioso: si una fuente falla (timeout, paywall, IP bloqueada) devuelve `empty_liquidations()` y el dashboard sigue funcional.
+
+El burst se dispara en cuatro sitios:
+
+- **Auto al arrancar `streamlit run app.py`**: `_maybe_start_background_burst()` lanza un daemon thread con `collect_executed_burst()`. No bloquea la UI; al terminar limpia el caché de `_cached_liquidations`. Throttled por mtime del JSONL (`auto_burst_min_interval_minutes`, default 5).
+- `scripts/scan.py` al inicio (configurable con `burst_seconds` o env `SCAN_BURST_SECONDS`)
+- `python -m pump_detector.liquidations.executed_ws` (CLI suelto)
+- Botón **🔥 Actualizar liquidaciones (WS 20s)** dentro del propio Streamlit
+
+Configuración relevante (`settings.yaml` → `liquidations.executed`):
+
+```yaml
+auto_burst_on_startup: true            # desactívalo si te molesta
+auto_burst_seconds: 20
+auto_burst_min_interval_minutes: 5     # throttle entre bursts auto
 ```
 
 ---
@@ -168,7 +251,7 @@ storage:
 ## Reglas para agentes
 
 1. **Tests primero**: Antes de modificar `signals.py`, `scanner.py` o `storage.py`, ejecuta `pytest -q` para confirmar que el estado base es verde.
-2. **No modificar `data/`**: Los archivos CSV/SQLite son datos de runtime, nunca código.
+2. **No modificar `data/`** salvo que el usuario lo autorice explícitamente. Excepción permanente: `data/liquidations/_ws_history.jsonl` es cache compartida con el CI y puede regenerarse.
 3. **Umbrales viven en `settings.yaml`**, no hardcodeados en Python (salvo los defaults de `config.py`).
 4. **No cambiar la firma pública de `SignalSnapshot`** sin actualizar `storage.py` y `app.py`.
 5. **Símbolo de watchlist**: El formato esperado es `EXCHANGE:SYMBOL` (e.g. `BINANCE:BTCUSDT.P`). La normalización la hace `symbols.normalize_symbol()`.

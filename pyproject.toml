@@ -10,6 +10,8 @@ dependencies = [
     "PyYAML>=6.0",
     "streamlit>=1.34",
     "plotly>=5.20",
+    "websockets>=12",
+    "python-dotenv>=1.0",
 ]
 
 [tool.pytest.ini_options]

@@ -18,3 +18,12 @@ def test_marks_unsupported_non_exchange_symbols():
     assert market.exchange == "CRYPTOCAP"
     assert market.supported is False
     assert market.api_symbol == "TOTAL3"
+
+
+def test_normalize_busd_perp_as_unsupported_quote():
+    market = normalize_symbol("BINANCE:BTCBUSD.P")
+
+    assert market.base == "BTC"
+    assert market.quote == "BUSD"
+    assert market.api_symbol == "BTCBUSD"
+    assert market.supported is False

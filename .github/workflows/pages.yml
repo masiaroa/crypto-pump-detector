@@ -44,6 +44,14 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Collect liquidation burst (best-effort, public WS)
+        continue-on-error: true
+        timeout-minutes: 2
+        run: |
+          PYTHONPATH=src python -m pump_detector.liquidations.executed_ws \
+            --duration 30 \
+            --out data/liquidations/_ws_history.jsonl
+
       - name: Run scan (fetch live data from exchanges)
         run: PYTHONPATH=src python scripts/scan.py
 
@@ -60,6 +68,8 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add docs/index.html data/latest_scan.csv data/event_history.csv
+          [ -d data/liquidations ] && git add data/liquidations || true
+          [ -f data/liquidations/_ws_history.jsonl ] && git add -f data/liquidations/_ws_history.jsonl || true
           # Only commit if something actually changed
           git diff --staged --quiet \
             && echo "Nothing changed — skipping commit" \
