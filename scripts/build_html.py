@@ -267,7 +267,7 @@ def safe_float(value: object, default: float = 0.0) -> float:
             return default
     except (TypeError, ValueError):
         pass
-    if isinstance(value, str) and value.strip() in {"", "-", "—", "–", "â€""}:
+    if isinstance(value, str) and value.strip() in {"", "-", "—", "–"}:
         return default
     try:
         return float(value)
