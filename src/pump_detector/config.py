@@ -31,7 +31,7 @@ class Settings:
 
 
 DEFAULT_SETTINGS = {
-    "timeframes": ["4h"],
+    "timeframes": ["4h", "1d"],
     "alert_conditions": {
         "require_price_impulse": True,
         "require_oi_impulse": True,
@@ -101,15 +101,17 @@ def load_settings(path: Path | None = None) -> Settings:
     raw = read_yaml(path or CONFIG_DIR / "settings.yaml")
     merged = DEFAULT_SETTINGS | (raw or {})
 
-    # Allow env-var override: SCAN_TIMEFRAME=1d  (single value)
+    # Allow env-var override: SCAN_TIMEFRAME=1d or SCAN_TIMEFRAME=4h,1d
     env_tf = os.environ.get("SCAN_TIMEFRAME", "").strip()
     if env_tf:
-        if env_tf not in VALID_TIMEFRAMES:
+        requested_timeframes = [part.strip() for part in env_tf.split(",") if part.strip()]
+        invalid_timeframes = [tf for tf in requested_timeframes if tf not in VALID_TIMEFRAMES]
+        if invalid_timeframes:
             raise ValueError(
                 f"SCAN_TIMEFRAME='{env_tf}' is not valid. "
                 f"Allowed values: {sorted(VALID_TIMEFRAMES)}"
             )
-        merged["timeframes"] = [env_tf]
+        merged["timeframes"] = requested_timeframes
 
     return Settings(
         timeframes=list(merged["timeframes"]),

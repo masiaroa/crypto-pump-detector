@@ -116,4 +116,40 @@ def test_load_charts_falls_back_to_previous_embedded_chart_data(monkeypatch, tmp
 
     charts = build_html_module.load_charts()
 
-    assert charts == {"BYBIT:ADAUSDT.P": [{"close": 0.25}]}
+    assert charts == {"BYBIT:ADAUSDT.P": {"1d": [{"close": 0.25}]}}
+
+
+def test_build_html_embeds_multi_timeframe_chart_data_and_toggle():
+    charts = {
+        "BYBIT:BTCUSDT.P": {
+            "1d": [
+                {
+                    "timestamp": "2026-05-12 00:00:00+00:00",
+                    "open": 100,
+                    "high": 110,
+                    "low": 90,
+                    "close": 105,
+                    "volume": 1000,
+                }
+            ],
+            "4h": [
+                {
+                    "timestamp": "2026-05-12 04:00:00+00:00",
+                    "open": 104,
+                    "high": 108,
+                    "low": 101,
+                    "close": 107,
+                    "volume": 400,
+                }
+            ],
+        }
+    }
+
+    html = build_html([], {}, charts=charts)
+
+    assert 'data-default-tf="1d"' in html
+    assert 'class="tf-btn active" data-tf="1d"' in html
+    assert 'class="tf-btn" data-tf="4h"' in html
+    assert '"BYBIT:BTCUSDT.P":{"1d":[{' in html
+    assert '"4h":[{' in html
+    assert "slide.dataset.currentTf" in html

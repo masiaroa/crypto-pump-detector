@@ -101,9 +101,10 @@ def test_load_liquidations_recovers_previous_embedded_amounts(tmp_path, monkeypa
 
     liquidations = build_html_module.load_liquidations()
 
-    assert liquidations["BINANCE:BTCUSDT.P"][0]["notional"] == 120000
-    assert liquidations["BINANCE:BTCUSDT.P"][1]["notional"] == 45000
-    assert all("notional" in row for row in liquidations["BINANCE:BTCUSDT.P"])
+    rows = liquidations["BINANCE:BTCUSDT.P"]["1d"]
+    assert rows[0]["notional"] == 120000
+    assert rows[1]["notional"] == 45000
+    assert all("notional" in row for row in rows)
 
 
 def test_load_liquidations_can_use_ws_history_without_symbol_jsons(tmp_path, monkeypatch):
@@ -123,5 +124,5 @@ def test_load_liquidations_can_use_ws_history_without_symbol_jsons(tmp_path, mon
         {"BINANCE:BTCUSDT.P": {"timeframe": "4h"}}
     )
 
-    assert liquidations["BINANCE:BTCUSDT.P"][0]["notional"] == 30250
-    assert liquidations["BINANCE:BTCUSDT.P"][0]["side"] == "long"
+    assert liquidations["BINANCE:BTCUSDT.P"]["4h"][0]["notional"] == 30250
+    assert liquidations["BINANCE:BTCUSDT.P"]["4h"][0]["side"] == "long"

@@ -30,8 +30,9 @@ def test_validate_static_html_rejects_slides_without_chart_data(tmp_path):
 def test_validate_static_html_accepts_embedded_chart_data(tmp_path):
     html_path = tmp_path / "index.html"
     html_path.write_text(
-        '<section class="slide" id="slide-1" data-symbol="BYBIT:ADAUSDT.P"></section>'
-        '<script>const CHART_DATA = {"BYBIT:ADAUSDT.P":[{"close":0.25}]};</script>',
+        '<section class="slide" id="slide-1" data-symbol="BYBIT:ADAUSDT.P">'
+        '<div class="tf-toggle"><button data-tf="1d"></button></div></section>'
+        '<script>const CHART_DATA = {"BYBIT:ADAUSDT.P":{"1d":[{"close":0.25}],"4h":[{"close":0.26}]}};</script>',
         encoding="utf-8",
     )
 
@@ -40,3 +41,32 @@ def test_validate_static_html_accepts_embedded_chart_data(tmp_path):
     assert result.ok is True
     assert result.slide_count == 1
     assert result.chart_series_count == 1
+
+
+def test_validate_static_html_rejects_crypto_slides_without_timeframe_toggle(tmp_path):
+    html_path = tmp_path / "index.html"
+    html_path.write_text(
+        '<section class="slide" id="slide-1" data-symbol="BYBIT:ADAUSDT.P"></section>'
+        '<script>const CHART_DATA = {"BYBIT:ADAUSDT.P":{"1d":[{"close":0.25}],"4h":[{"close":0.26}]}};</script>',
+        encoding="utf-8",
+    )
+
+    result = validate_module.validate_static_html(html_path)
+
+    assert result.ok is False
+    assert "timeframe toggle" in result.message
+
+
+def test_validate_static_html_rejects_missing_dual_timeframe_data(tmp_path):
+    html_path = tmp_path / "index.html"
+    html_path.write_text(
+        '<section class="slide" id="slide-1" data-symbol="BYBIT:ADAUSDT.P">'
+        '<div class="tf-toggle"><button data-tf="1d"></button></div></section>'
+        '<script>const CHART_DATA = {"BYBIT:ADAUSDT.P":{"1d":[{"close":0.25}]}};</script>',
+        encoding="utf-8",
+    )
+
+    result = validate_module.validate_static_html(html_path)
+
+    assert result.ok is False
+    assert "1d and 4h" in result.message

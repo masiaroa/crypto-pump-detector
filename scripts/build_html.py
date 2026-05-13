@@ -6,8 +6,8 @@ Run:
 
 Reads:
     data/event_history.csv   – recent signal events
-    data/latest_scan.csv     – one row per symbol (current state)
-    data/charts/*.json       – historical candle data per symbol
+    data/latest_scan.csv     – one row per symbol/timeframe (current state)
+    data/charts/*.json       – historical candle data per symbol/timeframe
 
 Writes:
     docs/index.html          – fully self-contained HTML (no server required)
@@ -34,7 +34,7 @@ DOCS_DIR = ROOT / "docs"
 
 
 # ---------------------------------------------------------------------------
-# Data loading
+# Data loading  (all return nested {symbol: {timeframe: data}})
 # ---------------------------------------------------------------------------
 
 def load_events() -> list[dict]:
@@ -47,27 +47,85 @@ def load_events() -> list[dict]:
     return df.fillna("—").head(60).to_dict("records")
 
 
-def load_scan() -> dict[str, dict]:
+def load_scan() -> dict[str, dict[str, dict]]:
+    """Returns {symbol: {timeframe: row_dict}}."""
     p = DATA_DIR / "latest_scan.csv"
     if not p.exists():
         return {}
     df = pd.read_csv(p)
     df = df.fillna(0)
-    return {str(row["symbol"]): row.to_dict() for _, row in df.iterrows()}
+    result: dict[str, dict[str, dict]] = {}
+    has_tf_col = "timeframe" in df.columns
+    for _, row in df.iterrows():
+        sym = str(row["symbol"])
+        tf = str(row["timeframe"]) if has_tf_col else "1d"
+        result.setdefault(sym, {})[tf] = row.to_dict()
+    return result
 
 
-def load_charts() -> dict[str, list]:
-    """Returns {symbol: [candle_dict, ...]} for last 90 candles per symbol."""
-    charts: dict[str, list] = {}
+def _primary_scan_row(by_tf: dict[str, dict], prefer_tf: str = "1d") -> dict:
+    """Pick preferred TF row from nested scan dict."""
+    return by_tf.get(prefer_tf) or next(iter(by_tf.values()), {})
+
+
+_VALID_TFS = {"1h", "4h", "1d"}
+
+
+def _normalize_charts_input(charts: dict) -> dict[str, dict[str, list]]:
+    """Accept old flat {sym: [list]} or new nested {sym: {tf: list}}."""
+    result: dict[str, dict[str, list]] = {}
+    for sym, val in charts.items():
+        if isinstance(val, list):
+            result[sym] = {"1d": val}
+        elif isinstance(val, dict):
+            result[sym] = val
+    return result
+
+
+def _normalize_scan_input(scan: dict) -> dict[str, dict[str, dict]]:
+    """Accept old flat {sym: row_dict} or new nested {sym: {tf: row_dict}}.
+
+    Heuristic: if ALL keys of the inner dict are valid TF strings, it's nested;
+    otherwise it's a flat scan row.
+    """
+    result: dict[str, dict[str, dict]] = {}
+    for sym, val in scan.items():
+        if not isinstance(val, dict):
+            continue
+        if val and all(k in _VALID_TFS for k in val):
+            # Already nested: {tf: row_dict}
+            result[sym] = val
+        else:
+            # Flat row dict — wrap with its own timeframe or default "1d"
+            tf = str(val.get("timeframe", "1d"))
+            result[sym] = {tf: val}
+    return result
+
+
+def _normalize_liqs_input(liquidations: dict) -> dict[str, dict[str, list]]:
+    """Accept old flat {sym: [list]} or new nested {sym: {tf: list}}."""
+    result: dict[str, dict[str, list]] = {}
+    for sym, val in liquidations.items():
+        if isinstance(val, list):
+            result[sym] = {"1d": val}
+        elif isinstance(val, dict):
+            result[sym] = val
+    return result
+
+
+def load_charts() -> dict[str, dict[str, list]]:
+    """Returns {symbol: {timeframe: [candle_dict, ...]}} for last 90 candles."""
+    charts: dict[str, dict[str, list]] = {}
     if not CHARTS_DIR.exists():
         return load_embedded_charts()
     for f in sorted(CHARTS_DIR.glob("*.json")):
         try:
             obj = json.loads(f.read_text("utf-8"))
             sym = obj.get("symbol", "")
+            tf = str(obj.get("timeframe", "1d"))
             data = obj.get("data", [])
-            # Only keep last 90 candles for dashboard
-            charts[sym] = data[-90:] if len(data) > 90 else data
+            data = data[-90:] if len(data) > 90 else data
+            charts.setdefault(sym, {})[tf] = data
         except Exception:
             pass
     return charts or load_embedded_charts()
@@ -95,44 +153,70 @@ def load_embedded_json(global_name: str, path: Path | None = None) -> dict:
     return data
 
 
-def load_embedded_charts(path: Path | None = None) -> dict[str, list]:
-    """Recover chart data embedded in a previous static HTML build."""
+def load_embedded_charts(path: Path | None = None) -> dict[str, dict[str, list]]:
+    """Recover chart data embedded in a previous static HTML build.
+
+    Handles both old flat shape {sym: [...]} and new nested shape {sym: {tf: [...]}}.
+    """
     data = load_embedded_json("CHART_DATA", path)
-    return {
-        str(symbol): rows[-90:] if len(rows) > 90 else rows
-        for symbol, rows in data.items()
-        if isinstance(rows, list) and rows
-    }
+    result: dict[str, dict[str, list]] = {}
+    for symbol, val in data.items():
+        if isinstance(val, list) and val:
+            # old flat shape → wrap as {"1d": [...]}
+            rows = val[-90:] if len(val) > 90 else val
+            result[str(symbol)] = {"1d": rows}
+        elif isinstance(val, dict):
+            by_tf: dict[str, list] = {}
+            for tf, rows in val.items():
+                if isinstance(rows, list) and rows:
+                    by_tf[str(tf)] = rows[-90:] if len(rows) > 90 else rows
+            if by_tf:
+                result[str(symbol)] = by_tf
+    return result
 
 
-def load_embedded_liquidations(path: Path | None = None) -> dict[str, list]:
+def _normalize_liq_rows(rows: list) -> list:
+    normalized = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        r = dict(row)
+        if "notional" not in r and "amount" in r:
+            r["notional"] = r["amount"]
+        normalized.append(r)
+    return normalized
+
+
+def load_embedded_liquidations(path: Path | None = None) -> dict[str, dict[str, list]]:
     """Recover liquidation data embedded in a previous static HTML build."""
     data = load_embedded_json("LIQUIDATION_DATA", path)
-    liquidations: dict[str, list] = {}
-    for symbol, rows in data.items():
-        if not isinstance(rows, list) or not rows:
-            continue
-        normalized = []
-        for row in rows[-250:]:
-            if not isinstance(row, dict):
-                continue
-            normalized_row = dict(row)
-            if "notional" not in normalized_row and "amount" in normalized_row:
-                normalized_row["notional"] = normalized_row["amount"]
-            normalized.append(normalized_row)
-        if normalized:
-            liquidations[str(symbol)] = normalized
-    return liquidations
+    result: dict[str, dict[str, list]] = {}
+    for symbol, val in data.items():
+        if isinstance(val, list) and val:
+            # old flat shape
+            normalized = _normalize_liq_rows(val[-250:])
+            if normalized:
+                result[str(symbol)] = {"1d": normalized}
+        elif isinstance(val, dict):
+            by_tf: dict[str, list] = {}
+            for tf, rows in val.items():
+                if isinstance(rows, list) and rows:
+                    normalized = _normalize_liq_rows(rows[-250:])
+                    if normalized:
+                        by_tf[str(tf)] = normalized
+            if by_tf:
+                result[str(symbol)] = by_tf
+    return result
 
 
-def load_ws_history_liquidations(symbols: dict[str, dict] | None = None) -> dict[str, list]:
+def load_ws_history_liquidations(symbols: dict[str, dict] | None = None) -> dict[str, dict[str, list]]:
     """Build per-symbol liquidation rows from the rolling WS history file."""
     if read_recent_liquidations is None:
         return {}
     history_path = LIQUIDATIONS_DIR / "_ws_history.jsonl"
     if not history_path.exists():
         return {}
-    liquidations: dict[str, list] = {}
+    liquidations: dict[str, dict[str, list]] = {}
     for symbol, scan_row in (symbols or {}).items():
         timeframe = str(scan_row.get("timeframe") or "1d")
         try:
@@ -144,13 +228,14 @@ def load_ws_history_liquidations(symbols: dict[str, dict] | None = None) -> dict
         rows = frame.tail(250).copy()
         if "timestamp" in rows.columns:
             rows["timestamp"] = rows["timestamp"].astype(str)
-        liquidations[symbol] = rows.fillna(0).to_dict(orient="records")
+        liq_rows = rows.fillna(0).to_dict(orient="records")
+        liquidations.setdefault(symbol, {})[timeframe] = liq_rows
     return liquidations
 
 
-def load_liquidations(symbols: dict[str, dict] | None = None) -> dict[str, list]:
-    """Returns {symbol: [liquidation_dict, ...]} for static overlays."""
-    liquidations: dict[str, list] = {}
+def load_liquidations(symbols: dict[str, dict] | None = None) -> dict[str, dict[str, list]]:
+    """Returns {symbol: {timeframe: [liquidation_dict, ...]}} for static overlays."""
+    liquidations: dict[str, dict[str, list]] = {}
     if not LIQUIDATIONS_DIR.exists():
         return load_embedded_liquidations()
     for f in sorted(LIQUIDATIONS_DIR.glob("*.json")):
@@ -159,8 +244,10 @@ def load_liquidations(symbols: dict[str, dict] | None = None) -> dict[str, list]
         try:
             obj = json.loads(f.read_text("utf-8"))
             sym = obj.get("symbol", "")
+            tf = str(obj.get("timeframe", "1d"))
             data = obj.get("data", [])
-            liquidations[sym] = data[-250:] if len(data) > 250 else data
+            data = data[-250:] if len(data) > 250 else data
+            liquidations.setdefault(sym, {})[tf] = data
         except Exception:
             pass
     return liquidations or load_ws_history_liquidations(symbols) or load_embedded_liquidations()
@@ -180,7 +267,7 @@ def safe_float(value: object, default: float = 0.0) -> float:
             return default
     except (TypeError, ValueError):
         pass
-    if isinstance(value, str) and value.strip() in {"", "-", "—", "–", "â€”"}:
+    if isinstance(value, str) and value.strip() in {"", "-", "—", "–", "â€""}:
         return default
     try:
         return float(value)
@@ -397,7 +484,20 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
     </section>"""
 
 
-def make_crypto_slide(idx: int, scan_row: dict, candles: list | None = None, liquidation_rows: list | None = None) -> str:
+def make_crypto_slide(
+    idx: int,
+    scan_row: dict,
+    candles_by_tf: dict[str, list] | None = None,
+    liqs_by_tf: dict[str, list] | None = None,
+    default_tf: str = "1d",
+) -> str:
+    candles_by_tf = candles_by_tf or {}
+    liqs_by_tf    = liqs_by_tf or {}
+
+    # Use default TF data for header metrics; fall back to first available TF
+    candles          = candles_by_tf.get(default_tf) or next(iter(candles_by_tf.values()), None) or []
+    liquidation_rows = liqs_by_tf.get(default_tf)   or next(iter(liqs_by_tf.values()),   None) or []
+
     symbol   = str(scan_row.get("symbol", ""))
     exchange = str(scan_row.get("exchange", ""))
     close    = safe_float(scan_row.get("close", 0))
@@ -413,11 +513,22 @@ def make_crypto_slide(idx: int, scan_row: dict, candles: list | None = None, liq
     else:
         base = ticker
 
-    icon = "🟢" if scan_row.get("alert_triggered") else ("🟡" if scan_row.get("signal_active") else "⚪")
+    icon      = "🟢" if scan_row.get("alert_triggered") else ("🟡" if scan_row.get("signal_active") else "⚪")
     canvas_id = f"s{idx}"
 
+    # TF toggle — show only when more than one TF is available; 1d first, then 4h
+    available_tfs = sorted(candles_by_tf.keys(), key=lambda t: (t != "1d", t))
+    tf_toggle_html = ""
+    if len(available_tfs) > 1:
+        buttons = ""
+        for tf in available_tfs:
+            active_cls = " active" if tf == default_tf else ""
+            label = tf.upper()
+            buttons += f'<button class="tf-btn{active_cls}" data-tf="{esc(tf)}">{label}</button>'
+        tf_toggle_html = f'<div class="tf-toggle">{buttons}</div>'
+
     return f"""
-    <section class="slide" id="slide-{idx}" data-idx="{idx}" data-symbol="{esc(symbol)}">
+    <section class="slide" id="slide-{idx}" data-idx="{idx}" data-symbol="{esc(symbol)}" data-default-tf="{esc(default_tf)}">
       <div class="slide-header crypto-header">
         <div class="crypto-title">
           <span class="crypto-icon">{icon}</span>
@@ -433,6 +544,7 @@ def make_crypto_slide(idx: int, scan_row: dict, candles: list | None = None, liq
               <tr><th>Shorts liquidated</th><td>{esc(format_money(totals["short"]))}</td></tr>
             </tbody>
           </table>
+          {tf_toggle_html}
         </div>
       </div>
       <div class="charts-grid">
@@ -537,6 +649,12 @@ html, body {
 }
 .liq-summary tr + tr th,
 .liq-summary tr + tr td { border-top: 1px solid #21262d; }
+
+/* ── TF toggle ── */
+.tf-toggle { display: flex; gap: 2px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 2px; }
+.tf-btn { background: transparent; color: #8b949e; border: 0; padding: 3px 9px; font-size: 11px; font-weight: 700; border-radius: 4px; cursor: pointer; }
+.tf-btn:hover { color: #e6edf3; }
+.tf-btn.active { background: #21262d; color: #58a6ff; }
 
 /* ── Badges ── */
 .badge { padding: 2px 7px; border-radius: 12px; font-size: 10px; font-weight: 700; white-space: nowrap; }
@@ -708,6 +826,23 @@ STATIC_JS = r"""
   slides.forEach(s => io.observe(s));
   updateUI(0);
 
+  // ── TF toggle handler ────────────────────────────────────────────────────
+  slidesEl.addEventListener('click', (e) => {
+    const btn = e.target.closest('.tf-btn');
+    if (!btn) return;
+    const slide = btn.closest('.slide');
+    if (!slide) return;
+    const tf = btn.dataset.tf;
+    if (slide.dataset.currentTf === tf) return;
+    slide.dataset.currentTf = tf;
+    slide.querySelectorAll('.tf-btn').forEach(b => b.classList.toggle('active', b === btn));
+    if (slide._charts) {
+      Object.values(slide._charts).forEach(c => { try { c && c.destroy(); } catch (_) {} });
+      slide._charts = null;
+    }
+    initCharts(slide, parseInt(slide.dataset.idx, 10));
+  });
+
   // ── Shared scale / plugin defaults ──────────────────────────────────────
   function deepClone(o) { return JSON.parse(JSON.stringify(o)); }
 
@@ -771,8 +906,8 @@ STATIC_JS = r"""
   // ── Japanese candlestick chart (price or OI) ─────────────────────────────
   function candleChart(id, candleData, liquidationRows) {
     const canvas = document.getElementById(id);
-    if (!canvas || !candleData.length) return;
-    new Chart(canvas.getContext('2d'), {
+    if (!canvas || !candleData.length) return null;
+    return new Chart(canvas.getContext('2d'), {
       type: 'candlestick',
       data: {
         datasets: [{
@@ -808,8 +943,8 @@ STATIC_JS = r"""
   // ── Bar chart (volume) ────────────────────────────────────────────────────
   function barChart(id, labels, values, color) {
     const canvas = document.getElementById(id);
-    if (!canvas) return;
-    new Chart(canvas.getContext('2d'), {
+    if (!canvas) return null;
+    return new Chart(canvas.getContext('2d'), {
       type: 'bar',
       data: { labels, datasets: [{ data: values, backgroundColor: color + 'cc', borderWidth: 0 }] },
       options: {
@@ -823,9 +958,9 @@ STATIC_JS = r"""
   // ── Funding rate bar chart (bps) ──────────────────────────────────────────
   function fundingChart(id, labels, values) {
     const canvas = document.getElementById(id);
-    if (!canvas) return;
+    if (!canvas) return null;
     const colors = values.map(v => v >= 0 ? '#d29922cc' : '#f85149cc');
-    new Chart(canvas.getContext('2d'), {
+    return new Chart(canvas.getContext('2d'), {
       type: 'bar',
       data: { labels, datasets: [{ data: values, backgroundColor: colors, borderWidth: 0 }] },
       options: {
@@ -843,42 +978,64 @@ STATIC_JS = r"""
   function initCharts(slideEl, idx) {
     if (idx === 0) return;
 
-    const symbol = slideEl.dataset.symbol;
-    const raw    = (typeof CHART_DATA !== 'undefined') ? CHART_DATA[symbol] : null;
+    const symbol     = slideEl.dataset.symbol;
+    const tf         = slideEl.dataset.currentTf || slideEl.dataset.defaultTf || '1d';
+    const chartsByTf = (typeof CHART_DATA !== 'undefined') ? CHART_DATA[symbol] : null;
+
+    // Support both old flat shape (array) and new nested shape ({tf: array})
+    let raw;
+    if (!chartsByTf) {
+      raw = null;
+    } else if (Array.isArray(chartsByTf)) {
+      raw = chartsByTf;
+    } else {
+      raw = chartsByTf[tf] || chartsByTf[Object.keys(chartsByTf)[0]] || null;
+    }
     if (!raw || !raw.length) return;
-    const liqs   = (typeof LIQUIDATION_DATA !== 'undefined') ? (LIQUIDATION_DATA[symbol] || []) : [];
+
+    const liqsByTf = (typeof LIQUIDATION_DATA !== 'undefined') ? LIQUIDATION_DATA[symbol] : null;
+    let liqs;
+    if (!liqsByTf) {
+      liqs = [];
+    } else if (Array.isArray(liqsByTf)) {
+      liqs = liqsByTf;
+    } else {
+      liqs = liqsByTf[tf] || [];
+    }
 
     const id  = 's' + idx;
     const vol = raw.map(d => +(d.volume || 0));
     const fr  = raw.map(d => Math.round(+(d.funding_rate || 0) * 1e6) / 100);
     const lbl = raw.map(d => String(d.timestamp || '').slice(0, 10));
 
-    // Price candlestick (requires open/high/low/close from scan data)
+    // Price candlestick
     const priceCandles = raw
       .filter(d => +d.open && +d.high && +d.low && +d.close)
       .map(d => ({ x: Date.parse(d.timestamp), o: +d.open, h: +d.high, l: +d.low, c: +d.close }));
-    candleChart('price-' + id, priceCandles, liqs);
+    const priceChart = candleChart('price-' + id, priceCandles, liqs);
 
     // OI candlestick — uses oi_open/high/low/close when available
+    let oiChart;
     const hasOiOhlc = raw.some(d => +d.oi_open > 0);
     if (hasOiOhlc) {
       const oiCandles = raw
         .filter(d => +d.oi_open > 0)
         .map(d => ({ x: Date.parse(d.timestamp), o: +d.oi_open, h: +d.oi_high, l: +d.oi_low, c: +(d.oi_close || d.open_interest) }));
-      candleChart('oi-' + id, oiCandles, []);
+      oiChart = candleChart('oi-' + id, oiCandles, []);
     } else {
       // Fallback: simple line with open_interest
       const oiVals = raw.map(d => +(d.open_interest || 0));
       const cvs = document.getElementById('oi-' + id);
-      if (cvs) new Chart(cvs.getContext('2d'), {
+      if (cvs) oiChart = new Chart(cvs.getContext('2d'), {
         type: 'line',
         data: { labels: lbl, datasets: [{ data: oiVals, borderColor: '#3fb950', backgroundColor: '#3fb95018', borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.15 }] },
         options: { responsive: true, maintainAspectRatio: false, animation: { duration: 200 }, plugins: { legend: { display: false } }, scales: { x: deepClone(SCALE_X_CAT), y: deepClone(SCALE_Y) } },
       });
     }
 
-    barChart    ('vol-' + id, lbl, vol, '#8b949e');
-    fundingChart('fr-'  + id, lbl, fr);
+    const volChart = barChart    ('vol-' + id, lbl, vol, '#8b949e');
+    const frChart  = fundingChart('fr-'  + id, lbl, fr);
+    slideEl._charts = { price: priceChart, oi: oiChart, vol: volChart, fr: frChart };
   }
 })();
 """
@@ -888,12 +1045,23 @@ STATIC_JS = r"""
 # HTML assembly
 # ---------------------------------------------------------------------------
 
-def build_html(events: list[dict], scan: dict[str, dict], charts: dict[str, list], liquidations: dict[str, list] | None = None) -> str:
-    liquidations = liquidations or {}
+def build_html(
+    events: list[dict],
+    scan: dict[str, dict[str, dict]],
+    charts: dict[str, dict[str, list]],
+    liquidations: dict[str, dict[str, list]] | None = None,
+) -> str:
+    # Normalize inputs: accept both old flat {sym: list/row} and new nested {sym: {tf: ...}}
+    charts      = _normalize_charts_input(charts)
+    scan        = _normalize_scan_input(scan)
+    liquidations = _normalize_liqs_input(liquidations or {})
+
+    # Build fallback rows from chart and event data (one row per symbol, any TF)
     fallback_rows: dict[str, dict] = {}
-    for symbol, candles in charts.items():
-        if candles:
-            fallback_rows[symbol] = row_from_chart(symbol, candles)
+    for symbol, candles_by_tf in charts.items():
+        any_candles = next(iter(candles_by_tf.values()), []) if candles_by_tf else []
+        if any_candles:
+            fallback_rows[symbol] = row_from_chart(symbol, any_candles)
     for event in events:
         raw_symbol = str(event.get("raw_symbol", ""))
         if raw_symbol and raw_symbol not in fallback_rows:
@@ -902,26 +1070,28 @@ def build_html(events: list[dict], scan: dict[str, dict], charts: dict[str, list
     # Build per-crypto slides from live scan rows when possible, then fall back
     # to chart/event data so GitHub Pages remains navigable after cloud API blocks.
     slide_symbols = {
-        sym for sym, row in scan.items()
-        if positive_float(row.get("close", 0)) or sym in fallback_rows
+        sym for sym, by_tf in scan.items()
+        if any(positive_float(r.get("close", 0)) for r in by_tf.values()) or sym in fallback_rows
     }
     slide_symbols.update(sym for sym, row in fallback_rows.items() if positive_float(row.get("close", 0)))
     valid_symbols = sorted(slide_symbols, key=lambda s: s.split(":")[-1])
 
+    # Flat scan rows for the events slide (prefer 1d)
     slide_rows: dict[str, dict] = {}
     for sym in valid_symbols:
-        scan_row = dict(scan.get(sym, {}))
+        by_tf = scan.get(sym, {})
+        primary_row = dict(_primary_scan_row(by_tf)) if by_tf else {}
         fallback_row = fallback_rows.get(sym, {})
-        if positive_float(scan_row.get("close", 0)):
-            slide_rows[sym] = scan_row
+        if positive_float(primary_row.get("close", 0)):
+            slide_rows[sym] = primary_row
         else:
-            merged = dict(scan_row)
+            merged = dict(primary_row)
             merged.update(fallback_row)
             slide_rows[sym] = merged
 
     slides: list[str] = [make_events_slide(events, slide_rows, {sym: i + 1 for i, sym in enumerate(valid_symbols)})]
     for i, sym in enumerate(valid_symbols, start=1):
-        slides.append(make_crypto_slide(i, slide_rows[sym], charts.get(sym, []), liquidations.get(sym, [])))
+        slides.append(make_crypto_slide(i, slide_rows[sym], charts.get(sym, {}), liquidations.get(sym, {})))
 
     n = len(slides)
 
@@ -931,9 +1101,13 @@ def build_html(events: list[dict], scan: dict[str, dict], charts: dict[str, list
         for i in range(n)
     )
 
-    # Embed chart data as one JS global
+    # Embed chart data as nested JS globals {sym: {tf: [candles]}}
     chart_data_json = json.dumps(charts, ensure_ascii=False, separators=(",", ":"))
-    client_liquidations = {sym: rows_for_client(rows) for sym, rows in liquidations.items()}
+    # Convert liquidations: {sym: {tf: rows}} → {sym: {tf: client_rows}}
+    client_liquidations = {
+        sym: {tf: rows_for_client(rows) for tf, rows in by_tf.items()}
+        for sym, by_tf in liquidations.items()
+    }
     liquidation_data_json = json.dumps(client_liquidations, ensure_ascii=False, separators=(",", ":"))
 
     slides_html = "\n".join(slides)
@@ -1000,7 +1174,11 @@ if __name__ == "__main__":
     events = load_events()
     scan   = load_scan()
     charts = load_charts()
-    liquidation_symbols = {symbol: scan.get(symbol, {}) for symbol in sorted(set(scan) | set(charts))}
+    # Flat scan rows (primary TF) for liquidation WS history lookup
+    liquidation_symbols = {
+        sym: _primary_scan_row(scan[sym]) if sym in scan else {}
+        for sym in sorted(set(scan) | set(charts))
+    }
     liquidations = load_liquidations(liquidation_symbols)
 
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
@@ -1010,11 +1188,13 @@ if __name__ == "__main__":
 
     size_kb = len(content.encode("utf-8")) // 1024
     n_charts = len(charts)
-    n_symbols = len([v for v in scan.values() if safe_float(v.get("close", 0)) > 0])
+    n_symbols = len([
+        sym for sym, by_tf in scan.items()
+        if any(safe_float(r.get("close", 0)) > 0 for r in by_tf.values())
+    ])
     print(f"✅  Generated {out}")
     print(f"    Size:    {size_kb} KB")
     print(f"    Symbols: {n_symbols} (with data) / {len(scan)} total")
     print(f"    Charts:  {n_charts} series")
     print(f"    Liqs:    {len(liquidations)} series")
     print(f"    Events:  {len(events)}")
-

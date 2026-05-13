@@ -3,11 +3,11 @@ import pytest
 from pump_detector.config import VALID_TIMEFRAMES, load_settings
 
 
-def test_load_settings_default_timeframe_is_4h(monkeypatch):
-    """Without env-var override the default timeframe should be 4h."""
+def test_load_settings_default_timeframes_include_4h_and_1d(monkeypatch):
+    """Without env-var override the default timeframes should include 4h and 1d."""
     monkeypatch.delenv("SCAN_TIMEFRAME", raising=False)
     settings = load_settings()
-    assert settings.timeframes == ["4h"]
+    assert settings.timeframes == ["4h", "1d"]
 
 
 def test_scan_timeframe_env_overrides_yaml(monkeypatch):
@@ -17,9 +17,16 @@ def test_scan_timeframe_env_overrides_yaml(monkeypatch):
     assert settings.timeframes == ["1d"]
 
 
+def test_scan_timeframe_env_accepts_csv_preserving_order(monkeypatch):
+    """SCAN_TIMEFRAME can force multiple timeframes for CI/manual recalculates."""
+    monkeypatch.setenv("SCAN_TIMEFRAME", "4h, 1d")
+    settings = load_settings()
+    assert settings.timeframes == ["4h", "1d"]
+
+
 def test_scan_timeframe_env_invalid_raises(monkeypatch):
     """An invalid SCAN_TIMEFRAME value must raise ValueError."""
-    monkeypatch.setenv("SCAN_TIMEFRAME", "15m")
+    monkeypatch.setenv("SCAN_TIMEFRAME", "4h,15m")
     with pytest.raises(ValueError, match="not valid"):
         load_settings()
 
