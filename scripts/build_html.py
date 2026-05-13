@@ -113,8 +113,11 @@ def _normalize_liqs_input(liquidations: dict) -> dict[str, dict[str, list]]:
     return result
 
 
+_MAX_CANDLES: dict[str, int] = {"1d": 120, "4h": 260, "1h": 360}
+
+
 def load_charts() -> dict[str, dict[str, list]]:
-    """Returns {symbol: {timeframe: [candle_dict, ...]}} for last 90 candles."""
+    """Returns {symbol: {timeframe: [candle_dict, ...]}}."""
     charts: dict[str, dict[str, list]] = {}
     if not CHARTS_DIR.exists():
         return load_embedded_charts()
@@ -124,7 +127,8 @@ def load_charts() -> dict[str, dict[str, list]]:
             sym = obj.get("symbol", "")
             tf = str(obj.get("timeframe", "1d"))
             data = obj.get("data", [])
-            data = data[-90:] if len(data) > 90 else data
+            limit = _MAX_CANDLES.get(tf, 120)
+            data = data[-limit:] if len(data) > limit else data
             charts.setdefault(sym, {})[tf] = data
         except Exception:
             pass
@@ -163,13 +167,15 @@ def load_embedded_charts(path: Path | None = None) -> dict[str, dict[str, list]]
     for symbol, val in data.items():
         if isinstance(val, list) and val:
             # old flat shape → wrap as {"1d": [...]}
-            rows = val[-90:] if len(val) > 90 else val
+            limit = _MAX_CANDLES.get("1d", 120)
+            rows = val[-limit:] if len(val) > limit else val
             result[str(symbol)] = {"1d": rows}
         elif isinstance(val, dict):
             by_tf: dict[str, list] = {}
             for tf, rows in val.items():
                 if isinstance(rows, list) and rows:
-                    by_tf[str(tf)] = rows[-90:] if len(rows) > 90 else rows
+                    limit = _MAX_CANDLES.get(str(tf), 120)
+                    by_tf[str(tf)] = rows[-limit:] if len(rows) > limit else rows
             if by_tf:
                 result[str(symbol)] = by_tf
     return result
@@ -392,7 +398,7 @@ def row_from_chart(symbol: str, candles: list) -> dict:
 
 def make_events_slide(events: list[dict], scan: dict[str, dict],
                       symbol_to_slide: dict[str, int]) -> str:
-    now_str = pd.Timestamp.now("UTC").strftime("%Y-%m-%d %H:%M UTC")
+    now_str = pd.Timestamp.now("Europe/Madrid").strftime("%Y-%m-%d %H:%M (Madrid)")
 
     # Active signals from latest scan (sorted by score desc)
     active = [v for v in scan.values() if v.get("signal_active") or v.get("alert_triggered")]
@@ -500,7 +506,16 @@ def make_crypto_slide(
 
     symbol   = str(scan_row.get("symbol", ""))
     exchange = str(scan_row.get("exchange", ""))
-    close    = safe_float(scan_row.get("close", 0))
+
+    # Use freshest TF's last candle close (4h > 1d) to avoid stale daily price
+    _TF_FRESHNESS = {"1h": 0, "4h": 1, "1d": 2}
+    freshest_tf = min(candles_by_tf, key=lambda t: _TF_FRESHNESS.get(t, 3)) if candles_by_tf else None
+    freshest_candles = candles_by_tf.get(freshest_tf, []) if freshest_tf else []
+    if freshest_candles and safe_float(freshest_candles[-1].get("close")) > 0:
+        close = safe_float(freshest_candles[-1]["close"])
+    else:
+        close = safe_float(scan_row.get("close", 0))
+
     change   = daily_change_pct(scan_row, candles)
     totals   = liquidation_totals(liquidation_rows)
 
