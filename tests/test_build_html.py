@@ -204,3 +204,31 @@ def test_build_html_overview_table_sorts_signals_and_surges_to_top():
     assert 0 < pos_signal < pos_surge < pos_plain
     assert "OI&nbsp;SURGE" in overview
     assert "ENTRY" in overview
+
+
+def test_overview_table_falls_back_to_chart_metrics_when_scan_csv_missing():
+    """When latest_scan.csv is absent, the overview table must still show
+    funding, OI 3-bar and volume 3-bar derived from chart candles."""
+    candles = []
+    for i in range(60):
+        candles.append({
+            "timestamp": f"2026-05-{i // 24 + 1:02d} {i % 24:02d}:00:00+00:00",
+            "open": 1.0, "high": 1.01, "low": 0.99, "close": 1.0,
+            "volume": 100, "open_interest": 1000.0,
+            "funding_rate": -0.00002,
+        })
+    candles[-3]["open_interest"] = 1020
+    candles[-2]["open_interest"] = 1040
+    candles[-1]["open_interest"] = 1060
+    candles[-3]["volume"] = 800
+    candles[-2]["volume"] = 800
+    candles[-1]["volume"] = 800
+
+    html = build_html([], {}, charts={"BINANCE:NEARUSD.P": {"4h": candles}})
+
+    overview = html.split('<table class="overview-table">', 1)[1].split("</table>", 1)[0]
+    assert "NEAR" in overview
+    assert "+6.0%" in overview
+    assert "VOL&nbsp;SURGE" in overview
+    assert "OI&nbsp;SURGE" in overview
+    assert "NEGATIVE" in overview

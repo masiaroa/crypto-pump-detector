@@ -34,6 +34,10 @@ fi
 echo "✅ $FRESH archivos de chart frescos."
 
 git add -f data/charts data/liquidations 2>/dev/null || true
+# Las metricas del scan tambien viajan al repo: CI no puede ejecutar scan.py
+# (Bybit/Binance geo-bloquean los runners de GitHub Actions), asi que sin
+# estos CSVs la tabla overview se renderiza con ceros.
+git add -f data/latest_scan.csv data/event_history.csv 2>/dev/null || true
 
 if git diff --cached --quiet; then
   echo "Sin diffs respecto al repo. Nada que pushear."

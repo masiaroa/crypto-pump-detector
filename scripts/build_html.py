@@ -377,18 +377,75 @@ def row_from_event(event: dict) -> dict:
     }
 
 
+def _classify_funding_simple(rate: float) -> str:
+    """Lightweight funding bucket used when the scan CSV is missing.
+
+    Mirrors pump_detector.signals.classify_funding's coarse thresholds without
+    needing the rolling-history percentile.
+    """
+    if rate is None:
+        return "UNKNOWN"
+    try:
+        r = float(rate)
+    except (TypeError, ValueError):
+        return "UNKNOWN"
+    if r != r:
+        return "UNKNOWN"
+    if r < 0:
+        return "NEGATIVE"
+    if r <= 0.0001:
+        return "NEUTRAL"
+    if r <= 0.0005:
+        return "POSITIVE"
+    return "HOT"
+
+
+def _three_bar_oi_pct(candles: list) -> float:
+    if len(candles) < 4:
+        return 0.0
+    older = safe_float(candles[-4].get("open_interest"))
+    latest = safe_float(candles[-1].get("open_interest"))
+    if older <= 0 or latest <= 0:
+        return 0.0
+    return latest / older - 1.0
+
+
+def _three_bar_volume_ratio(candles: list, window: int = 50) -> float:
+    if len(candles) < 4:
+        return 0.0
+    last_three = sum(safe_float(c.get("volume")) for c in candles[-3:])
+    history = candles[:-3][-window:]
+    sums = []
+    for i in range(3, len(history) + 1):
+        sums.append(sum(safe_float(c.get("volume")) for c in history[i - 3 : i]))
+    if not sums:
+        return 0.0
+    sums.sort()
+    median = sums[len(sums) // 2]
+    if median <= 0:
+        return 0.0
+    return last_three / median
+
+
 def row_from_chart(symbol: str, candles: list) -> dict:
     exchange = symbol.split(":", 1)[0] if ":" in symbol else ""
     last = candles[-1] if candles else {}
+    funding_rate = safe_float(last.get("funding_rate"))
+    oi_3bar = _three_bar_oi_pct(candles)
+    vol_3bar = _three_bar_volume_ratio(candles)
     return {
         "symbol": symbol,
         "exchange": exchange,
         "close": last.get("close", 0),
         "early_bullish_score": 0,
         "blowoff_risk_score": 0,
-        "funding_classification": "UNKNOWN",
-        "funding_rate": last.get("funding_rate", 0),
+        "funding_classification": _classify_funding_simple(funding_rate),
+        "funding_rate": funding_rate,
         "oi_change_pct": 0,
+        "oi_3bar_change_pct": oi_3bar,
+        "volume_3bar_ratio": vol_3bar,
+        "oi_surge_flag": oi_3bar >= 0.04,
+        "volume_surge_flag": vol_3bar >= 2.5,
     }
 
 
@@ -1147,12 +1204,20 @@ def build_html(
     scan        = _normalize_scan_input(scan)
     liquidations = _normalize_liqs_input(liquidations or {})
 
-    # Build fallback rows from chart and event data (one row per symbol, any TF)
+    # Build fallback rows from chart and event data (one row per symbol).
+    # Prefer 4h candles so the 3-bar surge fallbacks match the scanner.
     fallback_rows: dict[str, dict] = {}
     for symbol, candles_by_tf in charts.items():
-        any_candles = next(iter(candles_by_tf.values()), []) if candles_by_tf else []
-        if any_candles:
-            fallback_rows[symbol] = row_from_chart(symbol, any_candles)
+        if not candles_by_tf:
+            continue
+        candles = (
+            candles_by_tf.get("4h")
+            or candles_by_tf.get("1h")
+            or candles_by_tf.get("1d")
+            or next(iter(candles_by_tf.values()), [])
+        )
+        if candles:
+            fallback_rows[symbol] = row_from_chart(symbol, candles)
     for event in events:
         raw_symbol = str(event.get("raw_symbol", ""))
         if raw_symbol and raw_symbol not in fallback_rows:
