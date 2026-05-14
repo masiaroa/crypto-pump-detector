@@ -62,7 +62,7 @@ def scan_watchlist(
                 )
                 snapshots.append(snapshot)
                 details[(raw_symbol, timeframe)] = marked
-            except DataUnavailable as exc:
+            except Exception as exc:  # noqa: BLE001 - any failure (DataUnavailable, KeyError, etc.) must not crash the full scan
                 snapshots.append(_error_snapshot(raw_symbol, market.exchange, timeframe, str(exc)))
 
     if persist:

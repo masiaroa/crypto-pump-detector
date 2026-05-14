@@ -15,6 +15,7 @@ on:
       - "config/**"
       - "src/**"
       - "scripts/**"
+      - "data/charts/**"
 
 # Pages artifact deployment. Generated files are published without commits.
 permissions:
@@ -76,6 +77,7 @@ jobs:
             --out data/liquidations/_ws_history.jsonl
 
       - name: Run scan (fetch live data from exchanges)
+        continue-on-error: true
         run: PYTHONPATH=src python scripts/scan.py
 
       - name: Build static HTML dashboard

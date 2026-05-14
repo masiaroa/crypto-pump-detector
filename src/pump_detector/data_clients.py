@@ -77,18 +77,25 @@ def _fetch_bybit(market: MarketSymbol, timeframe: str, limit: int) -> pd.DataFra
         {"category": "linear", "symbol": symbol, "intervalTime": oi_interval, "limit": min(limit, 200)},
     )["result"]["list"]
     oi = pd.DataFrame(oi_raw)
-    oi["timestamp"] = pd.to_datetime(oi["timestamp"].astype("int64"), unit="ms", utc=True)
-    oi["open_interest"] = pd.to_numeric(oi["openInterest"], errors="coerce")
-    oi = oi[["timestamp", "open_interest"]].sort_values("timestamp")
+    if oi.empty or "timestamp" not in oi.columns or "openInterest" not in oi.columns:
+        # API returned empty or unexpected shape — build a neutral OI frame from kline timestamps
+        oi = pd.DataFrame({"timestamp": ohlcv["timestamp"], "open_interest": pd.NA})
+    else:
+        oi["timestamp"] = pd.to_datetime(oi["timestamp"].astype("int64"), unit="ms", utc=True)
+        oi["open_interest"] = pd.to_numeric(oi["openInterest"], errors="coerce")
+        oi = oi[["timestamp", "open_interest"]].sort_values("timestamp")
 
     funding_raw = _get_json(
         f"{base}/v5/market/funding/history",
         {"category": "linear", "symbol": symbol, "limit": 200},
     )["result"]["list"]
     funding = pd.DataFrame(funding_raw)
-    funding["timestamp"] = pd.to_datetime(funding["fundingRateTimestamp"].astype("int64"), unit="ms", utc=True)
-    funding["funding_rate"] = pd.to_numeric(funding["fundingRate"], errors="coerce")
-    funding = funding[["timestamp", "funding_rate"]].sort_values("timestamp")
+    if funding.empty or "fundingRateTimestamp" not in funding.columns:
+        funding = pd.DataFrame({"timestamp": ohlcv["timestamp"], "funding_rate": pd.NA})
+    else:
+        funding["timestamp"] = pd.to_datetime(funding["fundingRateTimestamp"].astype("int64"), unit="ms", utc=True)
+        funding["funding_rate"] = pd.to_numeric(funding["fundingRate"], errors="coerce")
+        funding = funding[["timestamp", "funding_rate"]].sort_values("timestamp")
 
     return _merge_market_frames(ohlcv, oi, funding)
 
@@ -130,15 +137,21 @@ def _fetch_binance_usdt_m(market: MarketSymbol, timeframe: str, limit: int) -> p
         {"symbol": symbol, "period": interval, "limit": min(limit, 500)},
     )
     oi = pd.DataFrame(oi_raw)
-    oi["timestamp"] = pd.to_datetime(oi["timestamp"].astype("int64"), unit="ms", utc=True)
-    oi["open_interest"] = pd.to_numeric(oi["sumOpenInterest"], errors="coerce")
-    oi = oi[["timestamp", "open_interest"]]
+    if oi.empty or "timestamp" not in oi.columns or "sumOpenInterest" not in oi.columns:
+        oi = pd.DataFrame({"timestamp": ohlcv["timestamp"], "open_interest": pd.NA})
+    else:
+        oi["timestamp"] = pd.to_datetime(oi["timestamp"].astype("int64"), unit="ms", utc=True)
+        oi["open_interest"] = pd.to_numeric(oi["sumOpenInterest"], errors="coerce")
+        oi = oi[["timestamp", "open_interest"]]
 
     funding_raw = _get_json(f"{base}/fapi/v1/fundingRate", {"symbol": symbol, "limit": 200})
     funding = pd.DataFrame(funding_raw)
-    funding["timestamp"] = pd.to_datetime(funding["fundingTime"].astype("int64"), unit="ms", utc=True)
-    funding["funding_rate"] = pd.to_numeric(funding["fundingRate"], errors="coerce")
-    funding = funding[["timestamp", "funding_rate"]]
+    if funding.empty or "fundingTime" not in funding.columns:
+        funding = pd.DataFrame({"timestamp": ohlcv["timestamp"], "funding_rate": pd.NA})
+    else:
+        funding["timestamp"] = pd.to_datetime(funding["fundingTime"].astype("int64"), unit="ms", utc=True)
+        funding["funding_rate"] = pd.to_numeric(funding["fundingRate"], errors="coerce")
+        funding = funding[["timestamp", "funding_rate"]]
 
     return _merge_market_frames(ohlcv.sort_values("timestamp"), oi.sort_values("timestamp"), funding.sort_values("timestamp"))
 
@@ -196,14 +209,20 @@ def _fetch_binance_coin_m(market: MarketSymbol, timeframe: str, limit: int) -> p
         {"pair": pair, "contractType": "PERPETUAL", "period": interval, "limit": min(limit, 500)},
     )
     oi = pd.DataFrame(oi_raw)
-    oi["timestamp"] = pd.to_datetime(oi["timestamp"].astype("int64"), unit="ms", utc=True)
-    oi["open_interest"] = pd.to_numeric(oi["sumOpenInterest"], errors="coerce")
-    oi = oi[["timestamp", "open_interest"]]
+    if oi.empty or "timestamp" not in oi.columns or "sumOpenInterest" not in oi.columns:
+        oi = pd.DataFrame({"timestamp": ohlcv["timestamp"], "open_interest": pd.NA})
+    else:
+        oi["timestamp"] = pd.to_datetime(oi["timestamp"].astype("int64"), unit="ms", utc=True)
+        oi["open_interest"] = pd.to_numeric(oi["sumOpenInterest"], errors="coerce")
+        oi = oi[["timestamp", "open_interest"]]
 
     funding_raw = _get_json(f"{base}/dapi/v1/fundingRate", {"symbol": symbol, "limit": 200})
     funding = pd.DataFrame(funding_raw)
-    funding["timestamp"] = pd.to_datetime(funding["fundingTime"].astype("int64"), unit="ms", utc=True)
-    funding["funding_rate"] = pd.to_numeric(funding["fundingRate"], errors="coerce")
+    if funding.empty or "fundingTime" not in funding.columns:
+        funding = pd.DataFrame({"timestamp": ohlcv["timestamp"], "funding_rate": pd.NA})
+    else:
+        funding["timestamp"] = pd.to_datetime(funding["fundingTime"].astype("int64"), unit="ms", utc=True)
+        funding["funding_rate"] = pd.to_numeric(funding["fundingRate"], errors="coerce")
     funding = funding[["timestamp", "funding_rate"]]
 
     merged = _merge_market_frames(ohlcv.sort_values("timestamp"), oi.sort_values("timestamp"), funding.sort_values("timestamp"))
