@@ -1,13 +1,15 @@
 name: Build & Deploy Dashboard
 
+# Los datos se generan fuera de GitHub Actions (los runners están en Azure y
+# Bybit/Binance bloquean esos rangos IP con 403/451). El refresh corre en local
+# vía scripts/refresh.sh y commitea data/charts y data/liquidations. Este
+# workflow solo construye el HTML estático y lo despliega en Pages.
+#
 # Triggers:
-#   • Daily at 02:00 UTC (after Asia close)
 #   • Manual dispatch (Actions tab → "Run workflow")
-#   • Push to main when source code or config changes
+#   • Push a main cuando cambian fuentes, config o datos
 
 on:
-  schedule:
-    - cron: "0 2 * * *"
   workflow_dispatch:
   push:
     branches: [main]
@@ -16,6 +18,7 @@ on:
       - "src/**"
       - "scripts/**"
       - "data/charts/**"
+      - "data/liquidations/**"
 
 # Pages artifact deployment. Generated files are published without commits.
 permissions:
@@ -49,36 +52,6 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
-
-      - name: Restore chart cache
-        uses: actions/cache@v4
-        with:
-          path: data/charts
-          key: charts-${{ github.ref_name }}-${{ github.run_id }}
-          restore-keys: |
-            charts-${{ github.ref_name }}-
-            charts-
-
-      - name: Restore liquidation cache
-        uses: actions/cache@v4
-        with:
-          path: data/liquidations
-          key: liquidations-${{ github.ref_name }}-${{ github.run_id }}
-          restore-keys: |
-            liquidations-${{ github.ref_name }}-
-            liquidations-
-
-      - name: Collect liquidation burst (best-effort, public WS)
-        continue-on-error: true
-        timeout-minutes: 2
-        run: |
-          PYTHONPATH=src python -m pump_detector.liquidations.executed_ws \
-            --duration 30 \
-            --out data/liquidations/_ws_history.jsonl
-
-      - name: Run scan (fetch live data from exchanges)
-        continue-on-error: true
-        run: PYTHONPATH=src python scripts/scan.py
 
       - name: Build static HTML dashboard
         run: PYTHONPATH=src python scripts/build_html.py
