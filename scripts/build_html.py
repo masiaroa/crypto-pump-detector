@@ -21,11 +21,6 @@ from pathlib import Path
 
 import pandas as pd
 
-try:
-    from pump_detector.liquidations.executed_store import read_recent as read_recent_liquidations
-except Exception:  # pragma: no cover - build still works without PYTHONPATH=src
-    read_recent_liquidations = None
-
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 CHARTS_DIR = DATA_DIR / "charts"
@@ -215,31 +210,7 @@ def load_embedded_liquidations(path: Path | None = None) -> dict[str, dict[str, 
     return result
 
 
-def load_ws_history_liquidations(symbols: dict[str, dict] | None = None) -> dict[str, dict[str, list]]:
-    """Build per-symbol liquidation rows from the rolling WS history file."""
-    if read_recent_liquidations is None:
-        return {}
-    history_path = LIQUIDATIONS_DIR / "_ws_history.jsonl"
-    if not history_path.exists():
-        return {}
-    liquidations: dict[str, dict[str, list]] = {}
-    for symbol, scan_row in (symbols or {}).items():
-        timeframe = str(scan_row.get("timeframe") or "1d")
-        try:
-            frame = read_recent_liquidations(history_path, symbol, timeframe)
-        except Exception:
-            continue
-        if frame.empty:
-            continue
-        rows = frame.tail(250).copy()
-        if "timestamp" in rows.columns:
-            rows["timestamp"] = rows["timestamp"].astype(str)
-        liq_rows = rows.fillna(0).to_dict(orient="records")
-        liquidations.setdefault(symbol, {})[timeframe] = liq_rows
-    return liquidations
-
-
-def load_liquidations(symbols: dict[str, dict] | None = None) -> dict[str, dict[str, list]]:
+def load_liquidations() -> dict[str, dict[str, list]]:
     """Returns {symbol: {timeframe: [liquidation_dict, ...]}} for static overlays."""
     liquidations: dict[str, dict[str, list]] = {}
     if not LIQUIDATIONS_DIR.exists():
@@ -256,7 +227,7 @@ def load_liquidations(symbols: dict[str, dict] | None = None) -> dict[str, dict[
             liquidations.setdefault(sym, {})[tf] = data
         except Exception:
             pass
-    return liquidations or load_ws_history_liquidations(symbols) or load_embedded_liquidations()
+    return liquidations or load_embedded_liquidations()
 
 
 # ---------------------------------------------------------------------------
@@ -339,6 +310,14 @@ def daily_change_pct(scan_row: dict, candles: list | None) -> float:
         if open_price > 0 and close_price > 0:
             return close_price / open_price - 1
     return safe_float(scan_row.get("price_return_pct"))
+
+
+def format_long_short(long_pct: float, short_pct: float) -> str:
+    long_pct = safe_float(long_pct)
+    short_pct = safe_float(short_pct)
+    if long_pct <= 0 and short_pct <= 0:
+        return "—"
+    return f"{long_pct * 100:.0f}% / {short_pct * 100:.0f}%"
 
 
 def liquidation_totals(rows: list | None) -> dict[str, float]:
@@ -488,6 +467,8 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
             "oi_3bar": safe_float(row.get("oi_3bar_change_pct", 0)),
             "vol_3bar": safe_float(row.get("volume_3bar_ratio", 0)),
             "funding": str(row.get("funding_classification", "UNKNOWN")),
+            "long_pct": safe_float(row.get("long_account_ratio", 0)),
+            "short_pct": safe_float(row.get("short_account_ratio", 0)),
         })
     overview_rows.sort(key=lambda r: (-r["priority"], -r["bull"], r["symbol"]))
 
@@ -516,6 +497,8 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
             sym_cell = f'<td class="sym-cell">{icon} {label}</td>'
         change_color = "#3fb950" if r["change"] >= 0 else "#f85149"
         oi3_color = "#3fb950" if r["oi_3bar"] >= 0 else "#f85149"
+        ls_label = format_long_short(r["long_pct"], r["short_pct"])
+        ls_color = "#3fb950" if r["long_pct"] >= r["short_pct"] else "#f85149"
         overview_rows_html += f"""
           <tr>
             {sym_cell}
@@ -526,6 +509,7 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
             <td style="color:{oi3_color}">{r["oi_3bar"]*100:+.1f}%</td>
             <td>{r["vol_3bar"]:.1f}x</td>
             <td><span class="badge {funding_badge_class(r["funding"])}">{esc(r["funding"])}</span></td>
+            <td style="color:{ls_color}">{esc(ls_label)}</td>
             <td class="sig-cell">{sig_chips}</td>
           </tr>"""
 
@@ -536,7 +520,7 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
           <h3 class="section-label">Watchlist — click symbol to navigate · {signal_count} signal(s) · {surge_count} surge(s)</h3>
           <table class="overview-table">
             <thead>
-              <tr><th>Symbol</th><th>Price</th><th>Chg</th><th>Bull</th><th>Risk</th><th>OI&nbsp;3b</th><th>Vol&nbsp;3b</th><th>Funding</th><th>Signals</th></tr>
+              <tr><th>Symbol</th><th>Price</th><th>Chg</th><th>Bull</th><th>Risk</th><th>OI&nbsp;3b</th><th>Vol&nbsp;3b</th><th>Funding</th><th>L/S</th><th>Signals</th></tr>
             </thead>
             <tbody>{overview_rows_html}</tbody>
           </table>
@@ -632,6 +616,10 @@ def make_crypto_slide(
 
     change   = daily_change_pct(scan_row, candles)
     totals   = liquidation_totals(liquidation_rows)
+    long_pct = safe_float(scan_row.get("long_account_ratio"))
+    short_pct = safe_float(scan_row.get("short_account_ratio"))
+    ls_label = format_long_short(long_pct, short_pct)
+    ls_color = "#3fb950" if long_pct >= short_pct else "#f85149"
 
     # Derive readable base name from symbol
     ticker = symbol.split(":")[-1].replace(".P", "")
@@ -660,6 +648,7 @@ def make_crypto_slide(
     <section class="slide" id="slide-{idx}" data-idx="{idx}" data-symbol="{esc(symbol)}" data-default-tf="{esc(default_tf)}">
       <div class="slide-header crypto-header">
         <div class="crypto-title">
+          <button class="back-btn" data-goto="0" title="Back to overview">&#8592; Overview</button>
           <span class="crypto-icon">{icon}</span>
           <span class="crypto-base">{esc(base)}</span>
           <span class="crypto-exchange">{esc(exchange)}</span>
@@ -667,6 +656,7 @@ def make_crypto_slide(
         <div class="crypto-meta">
           <span class="crypto-price">{esc(format_price(close))}</span>
           <span class="metric-chip change-chip">Day&nbsp;{esc(format_pct(change))}</span>
+          <span class="metric-chip ls-chip" style="color:{ls_color}" title="Top traders long / short accounts">L/S&nbsp;{esc(ls_label)}</span>
           <table class="liq-summary">
             <tbody>
               <tr><th>Longs liquidated</th><td>{esc(format_money(totals["long"]))}</td></tr>
@@ -746,6 +736,13 @@ html, body {
 
 .crypto-header { gap: 6px; }
 .crypto-title { display: flex; align-items: center; gap: 8px; }
+.back-btn {
+  background: #21262d; color: #58a6ff; border: 1px solid #30363d;
+  padding: 3px 8px; font-size: 11px; font-weight: 700; border-radius: 6px;
+  cursor: pointer; transition: all 0.15s;
+}
+.back-btn:hover { background: #30363d; color: #79c0ff; border-color: #58a6ff; }
+.ls-chip { font-size: 11px; }
 .crypto-icon { font-size: 14px; }
 .crypto-base { font-size: 20px; font-weight: 800; letter-spacing: -0.5px; }
 .crypto-exchange { color: #8b949e; font-size: 10px; background: #21262d; padding: 2px 6px; border-radius: 4px; }
@@ -1016,43 +1013,44 @@ STATIC_JS = r"""
     beforeDatasetsDraw(chart, args, opts) {
       const rows = (opts && opts.rows) || [];
       if (!rows.length) return;
+      const candles = (opts && opts.candles) || [];
+      if (!candles.length) return;
+      const closesByTs = new Map();
+      for (const c of candles) {
+        const ts = Date.parse(c.timestamp || '');
+        if (Number.isFinite(ts)) closesByTs.set(ts, +c.close || 0);
+      }
       const xScale = chart.scales.x;
       const yScale = chart.scales.y;
       const area = chart.chartArea;
       const maxAmount = Math.max(...rows.map(r => +(r.amount || 0)), 1);
-      const minX = xScale.min;
-      const maxX = xScale.max;
-      const fallbackX = area.left + (area.right - area.left) * 0.06;
       const ctx = chart.ctx;
       ctx.save();
       for (const row of rows) {
-        const price = +(row.price || 0);
         const amount = +(row.amount || 0);
-        if (!price || !amount) continue;
-        const y = yScale.getPixelForValue(price);
-        if (y < area.top || y > area.bottom) continue;
+        if (!amount) continue;
         const rawX = Date.parse(row.timestamp || '');
-        const x = Number.isFinite(rawX) && rawX >= minX && rawX <= maxX ? xScale.getPixelForValue(rawX) : fallbackX;
+        if (!Number.isFinite(rawX)) continue;
+        const close = closesByTs.get(rawX);
+        if (!close) continue;
+        const x = xScale.getPixelForValue(rawX);
+        const y = yScale.getPixelForValue(close);
+        if (y < area.top || y > area.bottom) continue;
         const strength = Math.max(0.18, Math.min(0.85, amount / maxAmount));
-        const isProjected = row.kind === 'projected';
-        const color = row.side === 'short' ? '34,197,94' : row.side === 'long' ? '239,68,68' : '245,158,11';
-        ctx.globalAlpha = isProjected ? 0.10 + strength * 0.28 : 0.16 + strength * 0.34;
+        const color = row.side === 'short' ? '34,197,94' : '239,68,68';
+        ctx.globalAlpha = 0.16 + strength * 0.34;
         ctx.fillStyle = 'rgba(' + color + ',1)';
-        if (isProjected) {
-          ctx.fillRect(area.left, y - 1.5, area.right - area.left, 3);
-        } else {
-          const radius = 3 + strength * 8;
-          ctx.beginPath();
-          ctx.arc(x, y, radius, 0, Math.PI * 2);
-          ctx.fill();
-        }
+        const radius = 3 + strength * 8;
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fill();
       }
       ctx.restore();
     }
   };
 
   // ── Japanese candlestick chart (price or OI) ─────────────────────────────
-  function candleChart(id, candleData, liquidationRows) {
+  function candleChart(id, candleData, liquidationRows, rawCandles) {
     const canvas = document.getElementById(id);
     if (!canvas || !candleData.length) return null;
     return new Chart(canvas.getContext('2d'), {
@@ -1069,7 +1067,7 @@ STATIC_JS = r"""
         animation: { duration: 200 },
         plugins: {
           legend: { display: false },
-          liquidationOverlayPlugin: { rows: liquidationRows || [] },
+          liquidationOverlayPlugin: { rows: liquidationRows || [], candles: rawCandles || [] },
           tooltip: {
             callbacks: {
               label: (ctx) => {
@@ -1160,7 +1158,7 @@ STATIC_JS = r"""
     const priceCandles = raw
       .filter(d => +d.open && +d.high && +d.low && +d.close)
       .map(d => ({ x: Date.parse(d.timestamp), o: +d.open, h: +d.high, l: +d.low, c: +d.close }));
-    const priceChart = candleChart('price-' + id, priceCandles, liqs);
+    const priceChart = candleChart('price-' + id, priceCandles, liqs, raw);
 
     // OI candlestick — uses oi_open/high/low/close when available
     let oiChart;
@@ -1169,7 +1167,7 @@ STATIC_JS = r"""
       const oiCandles = raw
         .filter(d => +d.oi_open > 0)
         .map(d => ({ x: Date.parse(d.timestamp), o: +d.oi_open, h: +d.oi_high, l: +d.oi_low, c: +(d.oi_close || d.open_interest) }));
-      oiChart = candleChart('oi-' + id, oiCandles, []);
+      oiChart = candleChart('oi-' + id, oiCandles, [], []);
     } else {
       // Fallback: simple line with open_interest
       const oiVals = raw.map(d => +(d.open_interest || 0));
@@ -1330,12 +1328,7 @@ if __name__ == "__main__":
     events = load_events()
     scan   = load_scan()
     charts = load_charts()
-    # Flat scan rows (primary TF) for liquidation WS history lookup
-    liquidation_symbols = {
-        sym: _primary_scan_row(scan[sym]) if sym in scan else {}
-        for sym in sorted(set(scan) | set(charts))
-    }
-    liquidations = load_liquidations(liquidation_symbols)
+    liquidations = load_liquidations()
 
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
     content = build_html(events, scan, charts, liquidations)

@@ -35,28 +35,8 @@ storage:
 
 liquidations:
   enabled: true
-  executed:
-    # Desactivado por defecto: la app usa Coinalyze historico, no realtime.
-    enabled: false
-    providers:
-    - binance_ws
-    - bybit_ws
-    - okx_ws
-    burst_seconds: 30
-    history_file: data/liquidations/_ws_history.jsonl
-    max_age_days: 14
-    auto_burst_on_startup: false
-    auto_burst_seconds: 20
-    auto_burst_min_interval_minutes: 5
-  projected:
-    # Desactivado: los mapas de liquidaciones pendientes no tienen fuente gratis fiable.
-    # CoinGlass Liquidation Map requiere API/key de pago; no se usa en modo free.
-    enabled: false
-    provider: coinglass
-    use_frontend_endpoint: false
-    require_paid: false
   coinalyze:
-    # Fuente principal: liquidaciones historicas agregadas (free tier). Requiere registro en
+    # Fuente unica: liquidaciones historicas agregadas (free tier). Requiere registro en
     # https://coinalyze.net/account/api-key/ y export COINALYZE_API_KEY=...
     # Sin key se omite silenciosamente. 40 req/min.
     enabled: true

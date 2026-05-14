@@ -61,26 +61,9 @@ DEFAULT_SETTINGS = {
     },
         "liquidations": {
             "enabled": True,
-            "executed": {
-                "enabled": False,
-                "providers": ["binance_ws", "bybit_ws", "okx_ws"],
-                "burst_seconds": 30,
-                "history_file": "data/liquidations/_ws_history.jsonl",
-                "max_age_days": 14,
-                "auto_burst_on_startup": False,
-                "auto_burst_seconds": 20,
-                "auto_burst_min_interval_minutes": 5,
-            },
-            "projected": {
-                # Disabled by default: pending liquidation maps do not have a
-                # reliable free source. CoinGlass Liquidation Map requires a key.
-                "enabled": False,
-                "provider": "coinglass",
-                "use_frontend_endpoint": False,
-                "require_paid": False,
-            },
             "coinalyze": {
-                # Main historical source. Requires COINALYZE_API_KEY.
+                # Single source: Coinalyze historical aggregated liquidations
+                # (free tier). Requires COINALYZE_API_KEY in the environment.
                 "enabled": True,
             },
         },
