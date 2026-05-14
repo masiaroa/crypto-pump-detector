@@ -1,0 +1,22 @@
+# Normalizar line endings: LF en el repo, conversión automática en Windows
+* text=auto
+
+# Shell scripts siempre LF (evita el error "bash\r: No such file")
+*.sh text eol=lf
+
+# Python siempre LF
+*.py text eol=lf
+
+# YAML/JSON/Markdown LF
+*.yaml text eol=lf
+*.yml  text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+
+# Binarios: sin conversión
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.ico  binary
+*.sqlite binary
+
