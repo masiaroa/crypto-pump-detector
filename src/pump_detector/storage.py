@@ -8,6 +8,26 @@ import pandas as pd
 from .signals import SignalSnapshot
 
 
+def _migrate_schema(conn: sqlite3.Connection, df: pd.DataFrame) -> None:
+    """Add any columns present in *df* that are missing from the existing table."""
+    cursor = conn.execute("PRAGMA table_info(signal_snapshots)")
+    existing = {row[1] for row in cursor.fetchall()}
+    for col in df.columns:
+        if col not in existing:
+            # Infer a SQLite affinity from the pandas dtype
+            dtype = df[col].dtype
+            if pd.api.types.is_integer_dtype(dtype):
+                affinity = "INTEGER"
+            elif pd.api.types.is_float_dtype(dtype):
+                affinity = "REAL"
+            elif pd.api.types.is_bool_dtype(dtype):
+                affinity = "INTEGER"
+            else:
+                affinity = "TEXT"
+            conn.execute(f'ALTER TABLE signal_snapshots ADD COLUMN "{col}" {affinity}')
+    conn.commit()
+
+
 def append_snapshots(snapshots: list[SignalSnapshot], sqlite_path: Path, alerts_csv: Path) -> None:
     if not snapshots:
         return
@@ -20,6 +40,12 @@ def append_snapshots(snapshots: list[SignalSnapshot], sqlite_path: Path, alerts_
         with sqlite3.connect(sqlite_path, timeout=30) as conn:
             conn.execute("PRAGMA busy_timeout = 30000")
             conn.execute("PRAGMA journal_mode = WAL")
+            # Check whether the table already exists; if so, migrate missing columns.
+            table_exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='signal_snapshots'"
+            ).fetchone()
+            if table_exists:
+                _migrate_schema(conn, df)
             df.to_sql("signal_snapshots", conn, if_exists="append", index=False)
     except sqlite3.Error as exc:
         if sqlite_path.exists() and sqlite_path.stat().st_size == 0:
