@@ -138,13 +138,15 @@ def _export_event_history(details: dict, history_path: Path) -> None:
             continue
         sig_col = "signal_active_flag"
         pre_col = "pre_alert_flag"
-        if sig_col not in hist.columns and pre_col not in hist.columns:
+        oi_surge_col = "oi_surge_flag"
+        vol_surge_col = "volume_surge_flag"
+        relevant_cols = [sig_col, pre_col, oi_surge_col, vol_surge_col]
+        if not any(c in hist.columns for c in relevant_cols):
             continue
         mask = pd.Series(False, index=hist.index)
-        if sig_col in hist.columns:
-            mask |= hist[sig_col].astype(bool)
-        if pre_col in hist.columns:
-            mask |= hist[pre_col].astype(bool)
+        for c in relevant_cols:
+            if c in hist.columns:
+                mask |= hist[c].astype(bool)
         events = hist[mask].copy()
         if events.empty:
             continue
@@ -154,7 +156,18 @@ def _export_event_history(details: dict, history_path: Path) -> None:
         for _, row in events.iterrows():
             is_signal = bool(row.get(sig_col, False))
             is_hot = bool(row.get("hot_pre_entry_flag", False))
-            et = "ENTRY" if is_signal else ("HOT_PRE_ENTRY" if is_hot else "PRE_ENTRY")
+            is_oi_surge = bool(row.get(oi_surge_col, False))
+            is_vol_surge = bool(row.get(vol_surge_col, False))
+            if is_signal:
+                et = "ENTRY"
+            elif is_oi_surge:
+                et = "OI_SURGE"
+            elif is_vol_surge:
+                et = "VOLUME_SURGE"
+            elif is_hot:
+                et = "HOT_PRE_ENTRY"
+            else:
+                et = "PRE_ENTRY"
             rows.append({
                 "event_type": et,
                 "timestamp": row["timestamp"],

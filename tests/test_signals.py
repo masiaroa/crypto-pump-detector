@@ -361,3 +361,101 @@ def test_daily_entry_rejects_small_non_breakout_price_move_even_with_recent_oi()
 
     assert bool(marked.iloc[-1]["price_impulse_flag"]) is True
     assert bool(marked.iloc[-1]["signal_active_flag"]) is False
+
+
+def test_mark_signal_history_flags_oi_surge_over_3_bars():
+    """OI rising ~5% across 3 4h bars (NEAR May 5 scenario) should set oi_surge_flag."""
+    rows = []
+    price = 10.0
+    oi = 1000.0
+    for i in range(130):
+        rows.append(
+            {
+                "timestamp": pd.Timestamp("2026-01-01", tz="UTC") + pd.Timedelta(hours=4 * i),
+                "open": price,
+                "high": price * 1.005,
+                "low": price * 0.995,
+                "close": price * 1.001,
+                "volume": 100_000,
+                "open_interest": oi,
+                "funding_rate": 0.00003,
+            }
+        )
+        price *= 1.0001
+        oi *= 1.0002
+
+    base_oi = rows[-4]["open_interest"]
+    rows[-3]["open_interest"] = base_oi * 1.015
+    rows[-2]["open_interest"] = base_oi * 1.032
+    rows[-1]["open_interest"] = base_oi * 1.055
+
+    marked = mark_signal_history(compute_indicators(pd.DataFrame(rows), lookback_stats=100), timeframe="4h")
+
+    assert bool(marked.iloc[-1]["oi_surge_flag"]) is True
+    assert marked.iloc[-1]["oi_3bar_change_pct"] > 0.04
+
+
+def test_mark_signal_history_flags_volume_surge_over_3_bars():
+    """A burst of 3 high-volume bars should set volume_surge_flag."""
+    rows = []
+    price = 10.0
+    oi = 1000.0
+    for i in range(130):
+        rows.append(
+            {
+                "timestamp": pd.Timestamp("2026-01-01", tz="UTC") + pd.Timedelta(hours=4 * i),
+                "open": price,
+                "high": price * 1.005,
+                "low": price * 0.995,
+                "close": price * 1.001,
+                "volume": 100_000,
+                "open_interest": oi,
+                "funding_rate": 0.00003,
+            }
+        )
+        price *= 1.0001
+        oi *= 1.0001
+
+    for j in (1, 2, 3):
+        rows[-j]["volume"] = 600_000
+
+    marked = mark_signal_history(compute_indicators(pd.DataFrame(rows), lookback_stats=100), timeframe="4h")
+
+    assert bool(marked.iloc[-1]["volume_surge_flag"]) is True
+    assert marked.iloc[-1]["volume_3bar_ratio"] >= 2.5
+
+
+def test_evaluate_latest_exposes_surge_flags_in_snapshot():
+    rows = []
+    price = 10.0
+    oi = 1000.0
+    for i in range(130):
+        rows.append(
+            {
+                "timestamp": pd.Timestamp("2026-01-01", tz="UTC") + pd.Timedelta(hours=4 * i),
+                "open": price,
+                "high": price * 1.005,
+                "low": price * 0.995,
+                "close": price * 1.001,
+                "volume": 100_000,
+                "open_interest": oi,
+                "funding_rate": 0.00003,
+            }
+        )
+        price *= 1.0001
+        oi *= 1.0002
+
+    base_oi = rows[-4]["open_interest"]
+    rows[-3]["open_interest"] = base_oi * 1.015
+    rows[-2]["open_interest"] = base_oi * 1.032
+    rows[-1]["open_interest"] = base_oi * 1.055
+    for j in (1, 2, 3):
+        rows[-j]["volume"] = 600_000
+
+    df = compute_indicators(pd.DataFrame(rows), lookback_stats=100)
+    snap = evaluate_latest(df, timeframe="4h", symbol="BINANCE:NEARUSD.P", exchange="BINANCE")
+
+    assert snap.oi_surge_flag is True
+    assert snap.volume_surge_flag is True
+    assert snap.oi_3bar_change_pct > 0.04
+    assert snap.volume_3bar_ratio >= 2.5

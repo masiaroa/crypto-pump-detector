@@ -41,6 +41,8 @@ def scan_watchlist(
                     close_position_min=float(settings.thresholds["close_position_min"]),
                     max_recent_price_run_pct=float(settings.thresholds["max_recent_price_run_pct"]),
                     max_consecutive_oi_expansion=int(settings.thresholds["max_consecutive_oi_expansion"]),
+                    oi_surge_3bar_pct=float(settings.thresholds.get("oi_surge_3bar_pct", 0.04)),
+                    volume_surge_3bar_ratio=float(settings.thresholds.get("volume_surge_3bar_ratio", 2.5)),
                 )
                 snapshot = evaluate_latest(
                     marked,
@@ -58,6 +60,8 @@ def scan_watchlist(
                     require_volume_confirmation=bool(settings.alert_conditions["require_volume_confirmation"]),
                     require_breakout_20=bool(settings.alert_conditions["require_breakout_20"]),
                     require_sma200_reclaim=bool(settings.alert_conditions["require_sma200_reclaim"]),
+                    oi_surge_3bar_pct=float(settings.thresholds.get("oi_surge_3bar_pct", 0.04)),
+                    volume_surge_3bar_ratio=float(settings.thresholds.get("volume_surge_3bar_ratio", 2.5)),
                     notes=data.notes,
                 )
                 snapshots.append(snapshot)
@@ -94,7 +98,11 @@ def _blank_snapshot(symbol: str, exchange: str, timeframe: str, note: str) -> Si
         oi=0.0,
         oi_change_pct=0.0,
         oi_change_zscore=0.0,
+        oi_3bar_change_pct=0.0,
         volume_zscore=0.0,
+        volume_3bar_ratio=0.0,
+        oi_surge_flag=False,
+        volume_surge_flag=False,
         funding_rate=0.0,
         funding_classification="UNKNOWN",
         funding_percentile_90d=0.0,

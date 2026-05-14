@@ -52,6 +52,8 @@ DEFAULT_SETTINGS = {
         "funding_extreme_percentile": 95,
         "max_recent_price_run_pct": 0.45,
         "max_consecutive_oi_expansion": 3,
+        "oi_surge_3bar_pct": 0.04,
+        "volume_surge_3bar_ratio": 2.5,
     },
     "storage": {
         "sqlite_path": "data/signals.sqlite",

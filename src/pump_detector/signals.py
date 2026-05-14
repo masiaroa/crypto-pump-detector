@@ -18,7 +18,11 @@ class SignalSnapshot:
     oi: float
     oi_change_pct: float
     oi_change_zscore: float
+    oi_3bar_change_pct: float
     volume_zscore: float
+    volume_3bar_ratio: float
+    oi_surge_flag: bool
+    volume_surge_flag: bool
     funding_rate: float
     funding_classification: str
     funding_percentile_90d: float
@@ -98,6 +102,10 @@ def compute_indicators(df: pd.DataFrame, lookback_stats: int = 100) -> pd.DataFr
     out["oi_expanding"] = out["oi_change"] > 0
     oi_median = out["oi_change_pct"].shift(1).rolling(lookback_stats, min_periods=max(10, lookback_stats // 5)).median()
     out["oi_strong_expansion"] = (out["oi_change_zscore"] > 1.0) & (out["oi_change_pct"] > oi_median)
+    out["oi_3bar_change_pct"] = out["open_interest"].pct_change(3).replace([np.inf, -np.inf], np.nan)
+    volume_3bar_sum = out["volume"].rolling(3, min_periods=3).sum()
+    vol_3bar_median = volume_3bar_sum.shift(1).rolling(lookback_stats, min_periods=max(10, lookback_stats // 5)).median()
+    out["volume_3bar_ratio"] = (volume_3bar_sum / vol_3bar_median).replace([np.inf, -np.inf], np.nan).fillna(0.0)
     return out
 
 
@@ -110,6 +118,8 @@ def mark_signal_history(
     close_position_min: float = 0.65,
     max_recent_price_run_pct: float = 0.45,
     max_consecutive_oi_expansion: int = 3,
+    oi_surge_3bar_pct: float = 0.04,
+    volume_surge_3bar_ratio: float = 2.5,
 ) -> pd.DataFrame:
     """Mark historical signals using only data available at each candle close."""
     out = df.copy().sort_values("timestamp").reset_index(drop=True)
@@ -183,6 +193,8 @@ def mark_signal_history(
     oi_lead_alert = out["oi_impulse_flag"] & ~out["price_impulse_flag"] & out["first_impulse_flag"] & price_not_bearish
     out["pre_alert_flag"] = price_lead_alert | oi_lead_alert
     out["hot_pre_entry_flag"] = out["pre_alert_flag"] & ((out["volume_zscore"] >= 2.0) | (out["volume_ratio"] >= 2.5))
+    out["oi_surge_flag"] = (out["oi_3bar_change_pct"] >= oi_surge_3bar_pct).fillna(False)
+    out["volume_surge_flag"] = (out["volume_3bar_ratio"] >= volume_surge_3bar_ratio).fillna(False)
     return out
 
 
@@ -202,6 +214,8 @@ def evaluate_latest(
     require_volume_confirmation: bool = False,
     require_breakout_20: bool = False,
     require_sma200_reclaim: bool = False,
+    oi_surge_3bar_pct: float = 0.04,
+    volume_surge_3bar_ratio: float = 2.5,
     notes: str = "",
 ) -> SignalSnapshot:
     allowed_funding_classes = allowed_funding_classes or ["NEGATIVE", "NEUTRAL", "POSITIVE", "HOT"]
@@ -248,8 +262,16 @@ def evaluate_latest(
     risk_score = _risk_score(latest, funding_class)
     signal_active = bool(price_impulse and oi_impulse and first_impulse)
     alert_triggered = bool(signal_active and optional_ok)
+    oi_3bar_change_pct = _float(latest.get("oi_3bar_change_pct"))
+    volume_3bar_ratio = _float(latest.get("volume_3bar_ratio"))
+    oi_surge_flag = bool(oi_3bar_change_pct >= oi_surge_3bar_pct)
+    volume_surge_flag = bool(volume_3bar_ratio >= volume_surge_3bar_ratio)
     last_signal_time = latest["timestamp"].isoformat() if signal_active else ""
     reasons = _notes(price_impulse, oi_impulse, first_impulse, funding_class, latest, notes)
+    if oi_surge_flag:
+        reasons += f"; OI surge 3-bar {oi_3bar_change_pct*100:.1f}%"
+    if volume_surge_flag:
+        reasons += f"; volume surge 3-bar {volume_3bar_ratio:.1f}x"
 
     return SignalSnapshot(
         symbol=symbol,
@@ -262,7 +284,11 @@ def evaluate_latest(
         oi=_float(latest["open_interest"]),
         oi_change_pct=_float(latest["oi_change_pct"]),
         oi_change_zscore=_float(latest["oi_change_zscore"]),
+        oi_3bar_change_pct=oi_3bar_change_pct,
         volume_zscore=_float(latest["volume_zscore"]),
+        volume_3bar_ratio=volume_3bar_ratio,
+        oi_surge_flag=oi_surge_flag,
+        volume_surge_flag=volume_surge_flag,
         funding_rate=_float(latest.get("funding_rate")),
         funding_classification=funding_class,
         funding_percentile_90d=funding_percentile,
