@@ -63,7 +63,7 @@ def load_scan() -> dict[str, dict[str, dict]]:
     return result
 
 
-def _primary_scan_row(by_tf: dict[str, dict], prefer_tf: str = "1d") -> dict:
+def _primary_scan_row(by_tf: dict[str, dict], prefer_tf: str = "4h") -> dict:
     """Pick preferred TF row from nested scan dict."""
     return by_tf.get(prefer_tf) or next(iter(by_tf.values()), {})
 
@@ -495,7 +495,7 @@ def make_crypto_slide(
     scan_row: dict,
     candles_by_tf: dict[str, list] | None = None,
     liqs_by_tf: dict[str, list] | None = None,
-    default_tf: str = "1d",
+    default_tf: str = "4h",
 ) -> str:
     candles_by_tf = candles_by_tf or {}
     liqs_by_tf    = liqs_by_tf or {}
@@ -532,7 +532,7 @@ def make_crypto_slide(
     canvas_id = f"s{idx}"
 
     # TF toggle — show only when more than one TF is available; 1d first, then 4h
-    available_tfs = sorted(candles_by_tf.keys(), key=lambda t: (t != "1d", t))
+    available_tfs = sorted(candles_by_tf.keys(), key=lambda t: (t != "4h", t))
     tf_toggle_html = ""
     if len(available_tfs) > 1:
         buttons = ""
@@ -841,21 +841,27 @@ STATIC_JS = r"""
   slides.forEach(s => io.observe(s));
   updateUI(0);
 
-  // ── TF toggle handler ────────────────────────────────────────────────────
+  // ── TF toggle handler — syncs all slides ────────────────────────────────
   slidesEl.addEventListener('click', (e) => {
     const btn = e.target.closest('.tf-btn');
     if (!btn) return;
-    const slide = btn.closest('.slide');
-    if (!slide) return;
+    const clickedSlide = btn.closest('.slide');
+    if (!clickedSlide) return;
     const tf = btn.dataset.tf;
-    if (slide.dataset.currentTf === tf) return;
-    slide.dataset.currentTf = tf;
-    slide.querySelectorAll('.tf-btn').forEach(b => b.classList.toggle('active', b === btn));
-    if (slide._charts) {
-      Object.values(slide._charts).forEach(c => { try { c && c.destroy(); } catch (_) {} });
-      slide._charts = null;
-    }
-    initCharts(slide, parseInt(slide.dataset.idx, 10));
+    if (clickedSlide.dataset.currentTf === tf) return;
+    slides.forEach(slide => {
+      const idx = parseInt(slide.dataset.idx, 10);
+      if (idx === 0) return;
+      slide.dataset.currentTf = tf;
+      slide.querySelectorAll('.tf-btn').forEach(b => b.classList.toggle('active', b.dataset.tf === tf));
+      if (inited.has(idx)) {
+        if (slide._charts) {
+          Object.values(slide._charts).forEach(c => { try { c && c.destroy(); } catch (_) {} });
+          slide._charts = null;
+        }
+        initCharts(slide, idx);
+      }
+    });
   });
 
   // ── Shared scale / plugin defaults ──────────────────────────────────────
@@ -994,7 +1000,7 @@ STATIC_JS = r"""
     if (idx === 0) return;
 
     const symbol     = slideEl.dataset.symbol;
-    const tf         = slideEl.dataset.currentTf || slideEl.dataset.defaultTf || '1d';
+    const tf         = slideEl.dataset.currentTf || slideEl.dataset.defaultTf || '4h';
     const chartsByTf = (typeof CHART_DATA !== 'undefined') ? CHART_DATA[symbol] : null;
 
     // Support both old flat shape (array) and new nested shape ({tf: array})
