@@ -396,48 +396,108 @@ def row_from_chart(symbol: str, candles: list) -> dict:
 # Slides
 # ---------------------------------------------------------------------------
 
+def _short_base(symbol: str) -> str:
+    ticker = symbol.split(":")[-1].replace(".P", "")
+    for suffix in ("USDT", "USD", "USDC"):
+        if ticker.endswith(suffix):
+            return ticker[: -len(suffix)]
+    return ticker
+
+
 def make_events_slide(events: list[dict], scan: dict[str, dict],
                       symbol_to_slide: dict[str, int]) -> str:
     now_str = pd.Timestamp.now("Europe/Madrid").strftime("%Y-%m-%d %H:%M (Madrid)")
 
-    # Active signals from latest scan (sorted by score desc)
-    active = [v for v in scan.values() if v.get("signal_active") or v.get("alert_triggered")]
-    active.sort(key=lambda r: safe_float(r.get("early_bullish_score", 0)), reverse=True)
+    # Build overview rows — one row per known symbol. Signals are sorted to the top,
+    # then OI/volume surges, then bullish score.
+    overview_rows = []
+    for sym, row in scan.items():
+        slide_idx = symbol_to_slide.get(sym, -1)
+        has_signal = bool(row.get("signal_active") or row.get("alert_triggered"))
+        oi_surge = bool(row.get("oi_surge_flag"))
+        vol_surge = bool(row.get("volume_surge_flag"))
+        priority = (3 if has_signal else 2 if oi_surge else 1 if vol_surge else 0)
+        overview_rows.append({
+            "symbol": sym,
+            "slide_idx": slide_idx,
+            "priority": priority,
+            "has_signal": has_signal,
+            "oi_surge": oi_surge,
+            "vol_surge": vol_surge,
+            "bull": safe_float(row.get("early_bullish_score", 0)),
+            "risk": safe_float(row.get("blowoff_risk_score", 0)),
+            "close": safe_float(row.get("close", 0)),
+            "change": safe_float(row.get("price_return_pct", 0)),
+            "oi_3bar": safe_float(row.get("oi_3bar_change_pct", 0)),
+            "vol_3bar": safe_float(row.get("volume_3bar_ratio", 0)),
+            "funding": str(row.get("funding_classification", "UNKNOWN")),
+        })
+    overview_rows.sort(key=lambda r: (-r["priority"], -r["bull"], r["symbol"]))
 
-    signal_cards_html = ""
-    if active:
-        for row in active[:8]:
-            sym   = esc(row.get("symbol", ""))
-            bull  = safe_float(row.get("early_bullish_score", 0))
-            risk  = safe_float(row.get("blowoff_risk_score", 0))
-            fc    = str(row.get("funding_classification", "UNKNOWN"))
-            close = safe_float(row.get("close", 0))
-            icon  = "🟢" if row.get("alert_triggered") else "🟡"
-            slide_idx = symbol_to_slide.get(str(row.get("symbol", "")), -1)
-            goto_attr = f'data-goto="{slide_idx}" style="cursor:pointer"' if slide_idx >= 0 else ""
-            signal_cards_html += f"""
-              <div class="signal-card" {goto_attr}>
-                <div class="signal-card-head">
-                  <span class="signal-sym">{icon} {sym}</span>
-                  <span class="badge {funding_badge_class(fc)}">{esc(fc)}</span>
-                </div>
-                <div class="signal-metrics">
-                  <span style="color:{score_color(bull)}">Bull {bull:.0f}</span>
-                  <span style="color:#f85149">Risk {risk:.0f}</span>
-                  <span style="color:#58a6ff">{esc(format_price(close))}</span>
-                </div>
-              </div>"""
-    else:
-        signal_cards_html = '<p class="no-signals">No active signals right now</p>'
+    signal_count = sum(1 for r in overview_rows if r["has_signal"])
+    surge_count = sum(1 for r in overview_rows if (r["oi_surge"] or r["vol_surge"]) and not r["has_signal"])
 
-    # Events table — Symbol FIRST column, clickable → navigate to crypto slide
+    overview_rows_html = ""
+    for r in overview_rows:
+        label = esc(_short_base(r["symbol"]))
+        if r["has_signal"]:
+            icon = "🟢"
+        elif r["oi_surge"] or r["vol_surge"]:
+            icon = "🟡"
+        else:
+            icon = "·"
+        sig_chips = ""
+        if r["has_signal"]:
+            sig_chips += '<span class="sig-chip sig-entry">ENTRY</span>'
+        if r["oi_surge"]:
+            sig_chips += f'<span class="sig-chip sig-oi" title="3-bar OI +{r["oi_3bar"]*100:.1f}%">OI&nbsp;SURGE</span>'
+        if r["vol_surge"]:
+            sig_chips += f'<span class="sig-chip sig-vol" title="3-bar volume {r["vol_3bar"]:.1f}x">VOL&nbsp;SURGE</span>'
+        if r["slide_idx"] >= 0:
+            sym_cell = f'<td class="sym-cell sym-link" data-goto="{r["slide_idx"]}">{icon} {label}</td>'
+        else:
+            sym_cell = f'<td class="sym-cell">{icon} {label}</td>'
+        change_color = "#3fb950" if r["change"] >= 0 else "#f85149"
+        oi3_color = "#3fb950" if r["oi_3bar"] >= 0 else "#f85149"
+        overview_rows_html += f"""
+          <tr>
+            {sym_cell}
+            <td>{esc(format_price(r["close"]))}</td>
+            <td style="color:{change_color}">{esc(format_pct(r["change"]))}</td>
+            <td style="color:{score_color(r["bull"])}">{r["bull"]:.0f}</td>
+            <td style="color:#f85149">{r["risk"]:.0f}</td>
+            <td style="color:{oi3_color}">{r["oi_3bar"]*100:+.1f}%</td>
+            <td>{r["vol_3bar"]:.1f}x</td>
+            <td><span class="badge {funding_badge_class(r["funding"])}">{esc(r["funding"])}</span></td>
+            <td class="sig-cell">{sig_chips}</td>
+          </tr>"""
+
+    overview_table_html = ""
+    if overview_rows_html:
+        overview_table_html = f"""
+        <div class="events-table-wrap">
+          <h3 class="section-label">Watchlist — click symbol to navigate · {signal_count} signal(s) · {surge_count} surge(s)</h3>
+          <table class="overview-table">
+            <thead>
+              <tr><th>Symbol</th><th>Price</th><th>Chg</th><th>Bull</th><th>Risk</th><th>OI&nbsp;3b</th><th>Vol&nbsp;3b</th><th>Funding</th><th>Signals</th></tr>
+            </thead>
+            <tbody>{overview_rows_html}</tbody>
+          </table>
+        </div>"""
+
+    # Recent events table (kept under the main overview as secondary info)
     event_rows_html = ""
-    for ev in events[:30]:
+    for ev in events[:20]:
         raw_sym   = str(ev.get("raw_symbol", ""))
         sym_label = esc(ev.get("symbol", raw_sym))
         slide_idx = symbol_to_slide.get(raw_sym, -1)
         et     = str(ev.get("event_type", ""))
-        et_cls = "et-entry" if et == "ENTRY" else ("et-hot" if et == "HOT_PRE_ENTRY" else "et-pre")
+        et_cls = {
+            "ENTRY": "et-entry",
+            "HOT_PRE_ENTRY": "et-hot",
+            "OI_SURGE": "et-oi",
+            "VOLUME_SURGE": "et-vol",
+        }.get(et, "et-pre")
         ts   = str(ev.get("timestamp", ""))[:10]
         bull = safe_float(ev.get("early_bullish_score", 0))
         risk = safe_float(ev.get("blowoff_risk_score", 0))
@@ -462,7 +522,7 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
     if event_rows_html:
         events_table_html = f"""
         <div class="events-table-wrap">
-          <h3 class="section-label">Recent Events — click symbol to navigate</h3>
+          <h3 class="section-label">Recent Events</h3>
           <table class="events-table">
             <thead>
               <tr><th>Symbol</th><th>Type</th><th>Date</th><th>Bull</th><th>Risk</th><th>Funding</th></tr>
@@ -481,10 +541,7 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
         <span class="scan-time">Last scan: {esc(now_str)} &middot; {len(scan)} symbols</span>
       </div>
       <div class="slide-body">
-        <div class="signals-section">
-          <h3 class="section-label">Active Signals ({len(active)})</h3>
-          <div class="signal-cards-grid">{signal_cards_html}</div>
-        </div>
+        {overview_table_html}
         {events_table_html}
       </div>
     </section>"""
@@ -711,7 +768,20 @@ html, body {
 .event-type-badge { padding: 1px 5px; border-radius: 4px; font-size: 9px; font-weight: 700; }
 .et-entry { background: #0d2a1a; color: #3fb950; }
 .et-hot   { background: #2d1b00; color: #d29922; }
+.et-oi    { background: #1a2f4b; color: #79c0ff; }
+.et-vol   { background: #2a1a4b; color: #d2a8ff; }
 .et-pre   { background: #1a1f29; color: #79c0ff; }
+
+/* ── Overview table ── */
+.overview-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.overview-table th { text-align: left; padding: 5px 7px; color: #8b949e; border-bottom: 1px solid #30363d; white-space: nowrap; position: sticky; top: 0; background: #0d1117; }
+.overview-table td { padding: 4px 7px; border-bottom: 1px solid #21262d; white-space: nowrap; }
+.overview-table tbody tr:hover { background: rgba(88,166,255,0.04); }
+.sig-cell { display: flex; gap: 4px; flex-wrap: wrap; }
+.sig-chip { padding: 1px 5px; border-radius: 4px; font-size: 9px; font-weight: 700; }
+.sig-entry { background: #0d2a1a; color: #3fb950; }
+.sig-oi    { background: #1a2f4b; color: #79c0ff; }
+.sig-vol   { background: #2a1a4b; color: #d2a8ff; }
 
 /* ── Charts 2x2 grid ── */
 .charts-grid {

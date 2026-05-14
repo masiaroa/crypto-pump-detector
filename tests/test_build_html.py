@@ -80,12 +80,16 @@ def test_build_html_handles_placeholder_metrics_and_renders_market_header():
 
     html = build_html([], scan, charts=charts)
 
-    assert "$0.2798" in html
-    assert "+3.6%" in html
-    assert "Bull&nbsp;" not in html
-    assert "Risk&nbsp;" not in html
-    assert "OI&nbsp;" not in html
-    assert "NEGATIVE" not in html
+    # Scope placeholder-metric assertions to the per-crypto slide; the new
+    # overview table on slide 0 legitimately shows funding/OI/Bull/Risk columns.
+    crypto_slide = html.split('id="slide-1"', 1)[1] if 'id="slide-1"' in html else ""
+
+    assert "$0.2798" in crypto_slide
+    assert "+3.6%" in crypto_slide
+    assert "Bull&nbsp;" not in crypto_slide
+    assert "Risk&nbsp;" not in crypto_slide
+    assert "OI&nbsp;" not in crypto_slide
+    assert "NEGATIVE" not in crypto_slide
 
 
 def test_build_html_daily_change_falls_back_to_scan_return_without_chart_ohlc():
@@ -153,3 +157,50 @@ def test_build_html_embeds_multi_timeframe_chart_data_and_toggle():
     assert '"BYBIT:BTCUSDT.P":{"1d":[{' in html
     assert '"4h":[{' in html
     assert "slide.dataset.currentTf" in html
+
+
+def test_build_html_overview_table_lists_all_symbols_with_clickable_tickers():
+    """First slide must show every watchlist symbol, even without signal."""
+    charts = {
+        "BYBIT:ADAUSDT.P": {"4h": [{"timestamp": "2026-05-12 00:00:00+00:00", "open": 0.27, "high": 0.28, "low": 0.26, "close": 0.28, "volume": 100}]},
+        "BINANCE:NEARUSD.P": {"4h": [{"timestamp": "2026-05-12 00:00:00+00:00", "open": 1.26, "high": 1.30, "low": 1.25, "close": 1.29, "volume": 200}]},
+    }
+    scan = {
+        "BYBIT:ADAUSDT.P": {"symbol": "BYBIT:ADAUSDT.P", "close": 0.28, "signal_active": False},
+        "BINANCE:NEARUSD.P": {"symbol": "BINANCE:NEARUSD.P", "close": 1.29, "signal_active": False},
+    }
+
+    html = build_html([], scan, charts=charts)
+
+    overview = html.split('<table class="overview-table">', 1)[1].split("</table>", 1)[0]
+    # Both symbols must appear
+    assert "ADA" in overview
+    assert "NEAR" in overview
+    # Tickers must be clickable (data-goto attribute) so user navigates to slide
+    assert overview.count("sym-link") >= 2
+    assert 'data-goto="' in overview
+
+
+def test_build_html_overview_table_sorts_signals_and_surges_to_top():
+    """Rows with active signal come first, then OI/volume surges, then the rest."""
+    charts = {
+        "BYBIT:AAA.P": {"4h": [{"timestamp": "2026-05-12 00:00:00+00:00", "open": 1, "high": 1.1, "low": 0.9, "close": 1.05, "volume": 1}]},
+        "BYBIT:BBB.P": {"4h": [{"timestamp": "2026-05-12 00:00:00+00:00", "open": 1, "high": 1.1, "low": 0.9, "close": 1.05, "volume": 1}]},
+        "BYBIT:CCC.P": {"4h": [{"timestamp": "2026-05-12 00:00:00+00:00", "open": 1, "high": 1.1, "low": 0.9, "close": 1.05, "volume": 1}]},
+    }
+    scan = {
+        "BYBIT:AAA.P": {"symbol": "BYBIT:AAA.P", "close": 1.05, "signal_active": False},
+        "BYBIT:BBB.P": {"symbol": "BYBIT:BBB.P", "close": 1.05, "signal_active": False, "oi_surge_flag": True, "oi_3bar_change_pct": 0.06},
+        "BYBIT:CCC.P": {"symbol": "BYBIT:CCC.P", "close": 1.05, "signal_active": True, "alert_triggered": True, "early_bullish_score": 80},
+    }
+
+    html = build_html([], scan, charts=charts)
+    overview = html.split('<table class="overview-table">', 1)[1].split("</table>", 1)[0]
+
+    pos_signal = overview.find("CCC")
+    pos_surge  = overview.find("BBB")
+    pos_plain  = overview.find("AAA")
+
+    assert 0 < pos_signal < pos_surge < pos_plain
+    assert "OI&nbsp;SURGE" in overview
+    assert "ENTRY" in overview
