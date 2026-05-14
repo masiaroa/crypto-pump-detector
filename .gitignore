@@ -9,9 +9,14 @@ data/*.sqlite-shm
 data/*.sqlite-wal
 data/*.log
 data/*.csv
+!data/latest_scan.csv
+!data/event_history.csv
 # data/charts y data/liquidations SÍ se commitean: GitHub Actions no puede
 # llegar a Bybit/Binance (geo-block 403/451). scripts/refresh.sh los regenera
 # localmente y los pushea — son la única fuente de verdad para Pages.
+# Por el mismo motivo, latest_scan.csv y event_history.csv tambien se commitean:
+# CI necesita las metricas del scan (bull/risk/funding/surges) para pintar la
+# tabla overview y los eventos recientes.
 
 # Generated HTML (produced by build_html.py)
 # GitHub Pages deploys docs/ from an Actions artifact; CI does not commit it.
