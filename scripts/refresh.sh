@@ -41,5 +41,6 @@ if git diff --cached --quiet; then
 fi
 
 git commit -m "data: refresh $(date -u +%Y-%m-%dT%H:%MZ)"
+git pull --rebase --autostash origin main
 git push
 echo "[$(date -Iseconds)] ✅ push completado. Pages se redesplegará en ~30s."
