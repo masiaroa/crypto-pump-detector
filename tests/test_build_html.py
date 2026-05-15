@@ -206,6 +206,68 @@ def test_build_html_overview_table_sorts_signals_and_surges_to_top():
     assert "ENTRY" in overview
 
 
+def test_build_html_renders_back_to_overview_button_on_each_crypto_slide():
+    charts = {
+        "BYBIT:BTCUSDT.P": {
+            "4h": [
+                {"timestamp": "2026-05-12 00:00:00+00:00", "open": 100, "high": 110, "low": 90, "close": 105, "volume": 1000}
+            ]
+        }
+    }
+    scan = {"BYBIT:BTCUSDT.P": {"symbol": "BYBIT:BTCUSDT.P", "close": 105}}
+
+    html = build_html([], scan, charts=charts)
+
+    crypto_slide = html.split('id="slide-1"', 1)[1]
+    assert 'class="back-btn"' in crypto_slide
+    assert 'data-goto="0"' in crypto_slide
+    # Overview itself must not get a back button on slide 0.
+    overview_slide = html.split('id="slide-0"', 1)[1].split('id="slide-1"', 1)[0]
+    assert 'class="back-btn"' not in overview_slide
+
+
+def test_build_html_renders_long_short_ratio_chip_when_scan_has_ratio():
+    charts = {
+        "BYBIT:BTCUSDT.P": {
+            "4h": [
+                {"timestamp": "2026-05-12 00:00:00+00:00", "open": 100, "high": 110, "low": 90, "close": 105, "volume": 1000}
+            ]
+        }
+    }
+    scan = {
+        "BYBIT:BTCUSDT.P": {
+            "symbol": "BYBIT:BTCUSDT.P",
+            "close": 105,
+            "long_account_ratio": 0.65,
+            "short_account_ratio": 0.35,
+        }
+    }
+
+    html = build_html([], scan, charts=charts)
+
+    crypto_slide = html.split('id="slide-1"', 1)[1]
+    assert "L/S&nbsp;65% / 35%" in crypto_slide
+    # Overview row mirrors the same data.
+    overview = html.split('<table class="overview-table">', 1)[1].split("</table>", 1)[0]
+    assert "65% / 35%" in overview
+
+
+def test_build_html_long_short_chip_falls_back_to_em_dash_when_ratio_missing():
+    charts = {
+        "BYBIT:BTCUSDT.P": {
+            "4h": [
+                {"timestamp": "2026-05-12 00:00:00+00:00", "open": 100, "high": 110, "low": 90, "close": 105, "volume": 1000}
+            ]
+        }
+    }
+    scan = {"BYBIT:BTCUSDT.P": {"symbol": "BYBIT:BTCUSDT.P", "close": 105}}
+
+    html = build_html([], scan, charts=charts)
+
+    crypto_slide = html.split('id="slide-1"', 1)[1]
+    assert "L/S&nbsp;—" in crypto_slide
+
+
 def test_overview_table_falls_back_to_chart_metrics_when_scan_csv_missing():
     """When latest_scan.csv is absent, the overview table must still show
     funding, OI 3-bar and volume 3-bar derived from chart candles."""

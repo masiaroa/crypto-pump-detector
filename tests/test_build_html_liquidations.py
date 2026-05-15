@@ -10,119 +10,94 @@ SPEC.loader.exec_module(build_html_module)
 build_html = build_html_module.build_html
 
 
-def test_build_html_embeds_liquidation_data_and_overlay_renderer():
-    charts = {
+def _btc_chart() -> dict:
+    return {
         "BINANCE:BTCUSDT.P": [
             {
                 "timestamp": "2026-05-10 00:00:00+00:00",
-                "open": 60000,
-                "high": 62000,
-                "low": 59000,
-                "close": 61000,
-                "volume": 100,
+                "open": 60000, "high": 62000, "low": 59000, "close": 61000, "volume": 100,
             }
         ]
     }
+
+
+def test_build_html_renders_liquidation_totals_in_header():
     liquidations = {
-        "BINANCE:BTCUSDT.P": [
-            {
-                "timestamp": "2026-05-10 00:00:00+00:00",
-                "price": 60500,
-                "notional": 100000,
-                "side": "long",
-                "kind": "executed",
-                "source": "binance",
-            },
-            {
-                "timestamp": "2026-05-10 00:00:00+00:00",
-                "price": 63000,
-                "notional": 250000,
-                "side": "short",
-                "kind": "projected",
-                "source": "coinglass",
-            },
-        ]
+        "BINANCE:BTCUSDT.P": {"long_notional": 150000, "short_notional": 250000},
     }
 
-    html = build_html([], {}, charts=charts, liquidations=liquidations)
-
-    assert "const LIQUIDATION_DATA =" in html
-    assert "liquidationOverlayPlugin" in html
-    assert "Liquidations" in html
-    assert '"kind":"projected"' in html
-    assert '"kind":"executed"' in html
-
-
-def test_build_html_shows_liquidated_long_and_short_dollar_totals():
-    charts = {
-        "BINANCE:BTCUSDT.P": [
-            {
-                "timestamp": "2026-05-10 00:00:00+00:00",
-                "open": 60000,
-                "high": 62000,
-                "low": 59000,
-                "close": 61000,
-                "volume": 100,
-            }
-        ]
-    }
-    liquidations = {
-        "BINANCE:BTCUSDT.P": [
-            {"notional": 100000, "side": "long"},
-            {"notional": 250000, "side": "short"},
-            {"notional": 50000, "side": "long"},
-            {"notional": 900000, "side": "unknown"},
-            {"notional": 800000},
-        ]
-    }
-
-    html = build_html([], {}, charts=charts, liquidations=liquidations)
+    html = build_html([], {}, charts=_btc_chart(), liquidations=liquidations)
 
     assert "Longs liquidated" in html
     assert "Shorts liquidated" in html
     assert "$150K" in html
     assert "$250K" in html
-    assert "$900K" not in html
-    assert "notional" not in html.lower()
 
 
-def test_load_liquidations_recovers_previous_embedded_amounts(tmp_path, monkeypatch):
-    docs_dir = tmp_path / "docs"
-    docs_dir.mkdir()
-    (docs_dir / "index.html").write_text(
-        '<script>const LIQUIDATION_DATA = {"BINANCE:BTCUSDT.P":['
-        '{"timestamp":"2026-05-10T00:00:00Z","amount":120000,"side":"long"},'
-        '{"timestamp":"2026-05-10T00:01:00Z","amount":45000,"side":"short"}'
-        "]};</script>",
+def test_build_html_no_longer_embeds_per_bar_liquidation_data():
+    """The dashboard only needs totals — no per-bar array / overlay plugin / global."""
+    liquidations = {"BINANCE:BTCUSDT.P": {"long_notional": 1.0, "short_notional": 2.0}}
+
+    html = build_html([], {}, charts=_btc_chart(), liquidations=liquidations)
+
+    assert "LIQUIDATION_DATA" not in html
+    assert "liquidationOverlayPlugin" not in html
+
+
+def test_build_html_embeds_per_tf_totals_as_data_attributes():
+    """Each crypto slide carries 4h+1d totals so JS can swap them when TF changes."""
+    charts = {
+        "BINANCE:BTCUSDT.P": {
+            "4h": [{"timestamp": "2026-05-10 00:00:00+00:00", "open": 60000, "high": 62000, "low": 59000, "close": 61000, "volume": 100}],
+            "1d": [{"timestamp": "2026-05-10 00:00:00+00:00", "open": 60000, "high": 62000, "low": 59000, "close": 61000, "volume": 100}],
+        }
+    }
+    liquidations = {
+        "BINANCE:BTCUSDT.P": {
+            "4h": {"long_notional": 12000, "short_notional": 3000},
+            "1d": {"long_notional": 90000, "short_notional": 80000},
+        }
+    }
+
+    html = build_html([], {}, charts=charts, liquidations=liquidations)
+
+    crypto_slide = html.split('id="slide-1"', 1)[1]
+    assert 'data-liq-long-4h="12000"' in crypto_slide
+    assert 'data-liq-short-4h="3000"' in crypto_slide
+    assert 'data-liq-long-1d="90000"' in crypto_slide
+    assert 'data-liq-short-1d="80000"' in crypto_slide
+    # 4h is the default TF — header should mirror it on first render.
+    assert "$12K" in crypto_slide
+    assert "$3K" in crypto_slide
+
+
+def test_load_liquidations_reads_totals_files(tmp_path, monkeypatch):
+    liq_dir = tmp_path / "liquidations"
+    liq_dir.mkdir()
+    (liq_dir / "BINANCE_BTCUSDT_P_4h.json").write_text(
+        '{"symbol":"BINANCE:BTCUSDT.P","timeframe":"4h","long_notional":7500,"short_notional":1200}',
         encoding="utf-8",
     )
-    monkeypatch.setattr(build_html_module, "DOCS_DIR", docs_dir)
-    monkeypatch.setattr(build_html_module, "LIQUIDATIONS_DIR", tmp_path / "missing")
+    monkeypatch.setattr(build_html_module, "LIQUIDATIONS_DIR", liq_dir)
 
     liquidations = build_html_module.load_liquidations()
 
-    rows = liquidations["BINANCE:BTCUSDT.P"]["1d"]
-    assert rows[0]["notional"] == 120000
-    assert rows[1]["notional"] == 45000
-    assert all("notional" in row for row in rows)
+    assert liquidations == {"BINANCE:BTCUSDT.P": {"4h": {"long": 7500.0, "short": 1200.0}}}
 
 
-def test_load_liquidations_can_use_ws_history_without_symbol_jsons(tmp_path, monkeypatch):
-    liquidations_dir = tmp_path / "liquidations"
-    liquidations_dir.mkdir()
-    (liquidations_dir / "_ws_history.jsonl").write_text(
-        '{"timestamp_ms":'
-        + str(int(build_html_module.pd.Timestamp.now(tz="UTC").timestamp() * 1000))
-        + ',"timestamp":"2026-05-10T00:00:00Z","symbol":"BTCUSDT",'
-        + '"price":60500,"quantity":0.5,"notional":30250,'
-        + '"side":"long","kind":"executed","source":"binance_ws"}\n',
+def test_load_liquidations_falls_back_to_legacy_per_bar_files(tmp_path, monkeypatch):
+    """Older JSON files written before the schema change still sum to totals."""
+    liq_dir = tmp_path / "liquidations"
+    liq_dir.mkdir()
+    (liq_dir / "BINANCE_BTCUSDT_P_4h.json").write_text(
+        '{"symbol":"BINANCE:BTCUSDT.P","timeframe":"4h","data":['
+        '{"timestamp":"2026-05-10T00:00:00Z","side":"long","notional":150},'
+        '{"timestamp":"2026-05-10T04:00:00Z","side":"short","notional":75}'
+        "]}",
         encoding="utf-8",
     )
-    monkeypatch.setattr(build_html_module, "LIQUIDATIONS_DIR", liquidations_dir)
+    monkeypatch.setattr(build_html_module, "LIQUIDATIONS_DIR", liq_dir)
 
-    liquidations = build_html_module.load_liquidations(
-        {"BINANCE:BTCUSDT.P": {"timeframe": "4h"}}
-    )
+    liquidations = build_html_module.load_liquidations()
 
-    assert liquidations["BINANCE:BTCUSDT.P"]["4h"][0]["notional"] == 30250
-    assert liquidations["BINANCE:BTCUSDT.P"]["4h"][0]["side"] == "long"
+    assert liquidations["BINANCE:BTCUSDT.P"]["4h"] == {"long": 150.0, "short": 75.0}
