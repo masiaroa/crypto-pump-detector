@@ -64,39 +64,29 @@ def _export_charts(details: dict, charts_dir: Path) -> None:
 
 
 def _export_liquidations(liquidations: dict, liquidations_dir: Path) -> None:
-    """Export aggregated long/short nominal USD per bar for the HTML dashboard.
+    """Export totals of liquidated USD long/short per (symbol, timeframe).
 
-    The static dashboard only needs total long vs short notional per bar — we
-    drop ``price`` / ``quantity`` / ``kind`` / ``source`` to keep the JSON
-    payloads small and the front-end overlay simple.
+    The dashboard only needs the aggregate that matches the chart window. We
+    sum across the full timeframe lookback Coinalyze returns — no per-bar
+    detail and no rendered overlay on the chart.
     """
     liquidations_dir.mkdir(parents=True, exist_ok=True)
     for (raw_symbol, timeframe), df in liquidations.items():
         if df is None or df.empty:
             continue
         subset = df.copy()
-        if "side" in subset.columns:
-            subset["side"] = subset["side"].astype(str).str.lower()
-            subset = subset[subset["side"].isin({"long", "short"})]
-        if subset.empty:
+        if "side" not in subset.columns or "notional" not in subset.columns:
             continue
-        if "timestamp" in subset.columns:
-            grouped = (
-                subset.groupby(["timestamp", "side"], as_index=False)["notional"]
-                .sum()
-                .sort_values(["timestamp", "side"])
-            )
-            grouped["timestamp"] = grouped["timestamp"].astype(str)
-            rows = grouped[["timestamp", "side", "notional"]].to_dict(orient="records")
-        else:
-            rows = (
-                subset.groupby("side", as_index=False)["notional"].sum()[["side", "notional"]]
-                .to_dict(orient="records")
-            )
+        subset["side"] = subset["side"].astype(str).str.lower()
+        long_total = float(subset.loc[subset["side"] == "long", "notional"].sum())
+        short_total = float(subset.loc[subset["side"] == "short", "notional"].sum())
+        if long_total <= 0 and short_total <= 0:
+            continue
         out = {
             "symbol": raw_symbol,
             "timeframe": timeframe,
-            "data": rows,
+            "long_notional": long_total,
+            "short_notional": short_total,
         }
         fname = _sanitize_key(raw_symbol, timeframe) + ".json"
         (liquidations_dir / fname).write_text(json.dumps(out), encoding="utf-8")
