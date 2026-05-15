@@ -1000,17 +1000,15 @@ STATIC_JS = r"""
   // ── Shared scale / plugin defaults ──────────────────────────────────────
   function deepClone(o) { return JSON.parse(JSON.stringify(o)); }
 
-  const SCALE_X_CAT = {
-    display: true,
-    ticks: { color: '#6e7681', font: { size: 8 }, maxTicksLimit: 5, maxRotation: 0 },
-    grid:  { color: 'rgba(48,54,61,0.6)' },
-  };
-  const SCALE_X_TIME = {
-    type: 'time',
-    time: { unit: 'day', displayFormats: { day: 'MMM d' } },
-    ticks: { color: '#6e7681', font: { size: 8 }, maxTicksLimit: 5, maxRotation: 0 },
-    grid:  { color: 'rgba(48,54,61,0.6)' },
-  };
+  function timeScale(min, max) {
+    return {
+      type: 'time',
+      min: min, max: max,
+      time: { unit: 'day', displayFormats: { day: 'MMM d' } },
+      ticks: { color: '#6e7681', font: { size: 8 }, maxTicksLimit: 5, maxRotation: 0 },
+      grid:  { color: 'rgba(48,54,61,0.6)' },
+    };
+  }
   const SCALE_Y = {
     display: true, position: 'right',
     ticks: { color: '#6e7681', font: { size: 8 }, maxTicksLimit: 4 },
@@ -1018,7 +1016,7 @@ STATIC_JS = r"""
   };
 
   // ── Japanese candlestick chart (price or OI) ─────────────────────────────
-  function candleChart(id, candleData) {
+  function candleChart(id, candleData, xMin, xMax) {
     const canvas = document.getElementById(id);
     if (!canvas || !candleData.length) return null;
     return new Chart(canvas.getContext('2d'), {
@@ -1047,41 +1045,41 @@ STATIC_JS = r"""
             },
           },
         },
-        scales: { x: deepClone(SCALE_X_TIME), y: deepClone(SCALE_Y) },
+        scales: { x: timeScale(xMin, xMax), y: deepClone(SCALE_Y) },
       },
     });
   }
 
-  // ── Bar chart (volume) ────────────────────────────────────────────────────
-  function barChart(id, labels, values, color) {
+  // ── Bar chart on a time axis (volume) ────────────────────────────────────
+  function barChart(id, points, color, xMin, xMax) {
     const canvas = document.getElementById(id);
     if (!canvas) return null;
     return new Chart(canvas.getContext('2d'), {
       type: 'bar',
-      data: { labels, datasets: [{ data: values, backgroundColor: color + 'cc', borderWidth: 0 }] },
+      data: { datasets: [{ data: points, backgroundColor: color + 'cc', borderWidth: 0 }] },
       options: {
         responsive: true, maintainAspectRatio: false, animation: { duration: 200 },
         plugins: { legend: { display: false } },
-        scales: { x: deepClone(SCALE_X_CAT), y: deepClone(SCALE_Y) },
+        scales: { x: timeScale(xMin, xMax), y: deepClone(SCALE_Y) },
       },
     });
   }
 
-  // ── Funding rate bar chart (bps) ──────────────────────────────────────────
-  function fundingChart(id, labels, values) {
+  // ── Funding rate bar chart (bps) on a time axis ──────────────────────────
+  function fundingChart(id, points, xMin, xMax) {
     const canvas = document.getElementById(id);
     if (!canvas) return null;
-    const colors = values.map(v => v >= 0 ? '#d29922cc' : '#f85149cc');
+    const colors = points.map(p => p.y >= 0 ? '#d29922cc' : '#f85149cc');
     return new Chart(canvas.getContext('2d'), {
       type: 'bar',
-      data: { labels, datasets: [{ data: values, backgroundColor: colors, borderWidth: 0 }] },
+      data: { datasets: [{ data: points, backgroundColor: colors, borderWidth: 0 }] },
       options: {
         responsive: true, maintainAspectRatio: false, animation: { duration: 200 },
         plugins: {
           legend: { display: false },
-          tooltip: { callbacks: { label: (i) => i.raw.toFixed(2) + ' bps' } },
+          tooltip: { callbacks: { label: (i) => (+i.raw.y).toFixed(2) + ' bps' } },
         },
-        scales: { x: deepClone(SCALE_X_CAT), y: deepClone(SCALE_Y) },
+        scales: { x: timeScale(xMin, xMax), y: deepClone(SCALE_Y) },
       },
     });
   }
@@ -1106,15 +1104,17 @@ STATIC_JS = r"""
     if (!raw || !raw.length) return;
 
     const id  = 's' + idx;
-    const vol = raw.map(d => +(d.volume || 0));
-    const fr  = raw.map(d => Math.round(+(d.funding_rate || 0) * 1e6) / 100);
-    const lbl = raw.map(d => String(d.timestamp || '').slice(0, 10));
 
-    // Price candlestick
+    // Price candlestick first — its full time range becomes the shared x-axis
+    // for all 4 subplots so the user can read price ↔ OI ↔ vol ↔ funding at
+    // the same x position even when OI/funding have shorter history.
     const priceCandles = raw
       .filter(d => +d.open && +d.high && +d.low && +d.close)
       .map(d => ({ x: Date.parse(d.timestamp), o: +d.open, h: +d.high, l: +d.low, c: +d.close }));
-    const priceChart = candleChart('price-' + id, priceCandles);
+    if (!priceCandles.length) return;
+    const xMin = priceCandles[0].x;
+    const xMax = priceCandles[priceCandles.length - 1].x;
+    const priceChart = candleChart('price-' + id, priceCandles, xMin, xMax);
 
     // OI candlestick — uses oi_open/high/low/close when available
     let oiChart;
@@ -1123,20 +1123,33 @@ STATIC_JS = r"""
       const oiCandles = raw
         .filter(d => +d.oi_open > 0)
         .map(d => ({ x: Date.parse(d.timestamp), o: +d.oi_open, h: +d.oi_high, l: +d.oi_low, c: +(d.oi_close || d.open_interest) }));
-      oiChart = candleChart('oi-' + id, oiCandles);
+      oiChart = candleChart('oi-' + id, oiCandles, xMin, xMax);
     } else {
-      // Fallback: simple line with open_interest
-      const oiVals = raw.map(d => +(d.open_interest || 0));
+      // Fallback: simple line with open_interest, also pinned to the price range
+      const oiPoints = raw
+        .filter(d => +(d.open_interest || 0) > 0)
+        .map(d => ({ x: Date.parse(d.timestamp), y: +d.open_interest }));
       const cvs = document.getElementById('oi-' + id);
-      if (cvs) oiChart = new Chart(cvs.getContext('2d'), {
+      if (cvs && oiPoints.length) oiChart = new Chart(cvs.getContext('2d'), {
         type: 'line',
-        data: { labels: lbl, datasets: [{ data: oiVals, borderColor: '#3fb950', backgroundColor: '#3fb95018', borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.15 }] },
-        options: { responsive: true, maintainAspectRatio: false, animation: { duration: 200 }, plugins: { legend: { display: false } }, scales: { x: deepClone(SCALE_X_CAT), y: deepClone(SCALE_Y) } },
+        data: { datasets: [{ data: oiPoints, borderColor: '#3fb950', backgroundColor: '#3fb95018', borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.15 }] },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: { duration: 200 },
+          plugins: { legend: { display: false } },
+          scales: { x: timeScale(xMin, xMax), y: deepClone(SCALE_Y) },
+        },
       });
     }
 
-    const volChart = barChart    ('vol-' + id, lbl, vol, '#8b949e');
-    const frChart  = fundingChart('fr-'  + id, lbl, fr);
+    const volPoints = raw
+      .filter(d => +(d.volume || 0) > 0)
+      .map(d => ({ x: Date.parse(d.timestamp), y: +d.volume }));
+    const frPoints = raw
+      .filter(d => Number.isFinite(+(d.funding_rate || 0)))
+      .map(d => ({ x: Date.parse(d.timestamp), y: Math.round(+(d.funding_rate || 0) * 1e6) / 100 }));
+
+    const volChart = barChart   ('vol-' + id, volPoints, '#8b949e', xMin, xMax);
+    const frChart  = fundingChart('fr-' + id, frPoints, xMin, xMax);
     slideEl._charts = { price: priceChart, oi: oiChart, vol: volChart, fr: frChart };
   }
 })();
