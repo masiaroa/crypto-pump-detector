@@ -613,6 +613,11 @@ def make_crypto_slide(
         for tf, v in liqs_by_tf.items()
     )
 
+    # On mobile we duplicate the TF toggle as an overlay on the price chart and
+    # render a floating "← Overview" button instead of taking header space.
+    # The existing click handler syncs all .tf-btn copies within a slide.
+    tf_overlay_html = tf_toggle_html.replace('class="tf-toggle"', 'class="tf-toggle tf-toggle-overlay"', 1)
+
     return f"""
     <section class="slide" id="slide-{idx}" data-idx="{idx}" data-symbol="{esc(symbol)}" data-default-tf="{esc(default_tf)}" {liq_data_attrs}>
       <div class="slide-header crypto-header">
@@ -636,8 +641,9 @@ def make_crypto_slide(
         </div>
       </div>
       <div class="charts-grid">
-        <div class="chart-box">
+        <div class="chart-box price-box">
           <div class="chart-label">Price</div>
+          {tf_overlay_html}
           <canvas id="price-{canvas_id}"></canvas>
         </div>
         <div class="chart-box">
@@ -857,13 +863,31 @@ html, body {
   opacity: 1; transition: opacity 2s;
 }
 
+/* ── Mobile-only floating UI (hidden on desktop) ── */
+.tf-toggle-overlay { display: none; }
+#back-to-overview {
+  display: none;
+  position: fixed;
+  right: 14px; bottom: 14px;
+  z-index: 1000;
+  background: #21262d; color: #58a6ff; border: 1px solid #30363d;
+  padding: 7px 12px; font-size: 12px; font-weight: 700;
+  border-radius: 999px; cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+}
+#back-to-overview:hover { background: #30363d; color: #79c0ff; border-color: #58a6ff; }
+body.show-back-btn #back-to-overview { display: inline-flex; align-items: center; }
+
 /* ── Mobile: stack to 1 column on narrow screens ── */
 @media (max-width: 420px) {
   .charts-grid { grid-template-columns: 1fr; grid-template-rows: repeat(4, 1fr); }
   #nav-dots { display: none; }
 
-  /* Force the crypto-slide header onto a single row, shrinking elements
-     and collapsing the 2-row liquidation table into one inline line. */
+  /* Header on mobile: no back button, no inline TF toggle — those move to
+     a floating button and a chart overlay respectively to free up space. */
+  .crypto-header > .crypto-title > .back-btn,
+  .crypto-header > .crypto-meta  > .tf-toggle { display: none; }
+
   .slide-header.crypto-header {
     flex-wrap: nowrap;
     gap: 5px;
@@ -873,13 +897,10 @@ html, body {
   }
   .crypto-title { gap: 4px; flex-shrink: 0; }
   .crypto-meta  { gap: 4px; flex-wrap: nowrap; min-width: 0; }
-  .back-btn { padding: 2px 6px; font-size: 10px; }
   .crypto-icon, .crypto-exchange { display: none; }
   .crypto-base  { font-size: 14px; }
   .crypto-price { font-size: 12px; }
   .metric-chip { font-size: 10px; }
-  .tf-toggle { padding: 1px; }
-  .tf-btn { padding: 2px 6px; font-size: 10px; }
 
   /* Flatten liq-summary: two <tr> become two inline pills on one line.
      The "Longs/Shorts liquidated" labels collapse to a single L:/S: prefix. */
@@ -891,6 +912,18 @@ html, body {
   .liq-summary td { padding: 0; font-size: 10px; }
   .liq-summary tr:first-child td::before { content: "L"; color: #f85149; margin-right: 3px; font-weight: 700; }
   .liq-summary tr:last-child td::before  { content: "S"; color: #3fb950; margin-right: 3px; font-weight: 700; }
+
+  /* TF toggle becomes an overlay on the price chart, top-right. */
+  .chart-box.price-box { position: relative; }
+  .tf-toggle-overlay {
+    display: flex;
+    position: absolute;
+    top: 4px; right: 4px;
+    z-index: 5;
+    background: rgba(13,17,23,0.85);
+    backdrop-filter: blur(2px);
+  }
+  .tf-toggle-overlay .tf-btn { padding: 2px 8px; font-size: 10px; }
 }
 """
 
@@ -917,6 +950,7 @@ STATIC_JS = r"""
     current = idx;
     dots.forEach((d, i) => d.classList.toggle('active', i === idx));
     counter.textContent = (idx + 1) + ' / ' + N;
+    document.body.classList.toggle('show-back-btn', idx > 0);
   }
 
   document.addEventListener('keydown', (e) => {
@@ -1255,6 +1289,7 @@ def build_html(
   <div id="nav-dots">{dots_html}</div>
   <div id="slide-counter">1 / {n}</div>
   <div id="swipe-hint">↑ swipe / arrow keys ↓</div>
+  <button id="back-to-overview" data-goto="0" title="Back to overview" aria-label="Back to overview">&#8592; Overview</button>
 
   <div id="slides">
 {slides_html}
