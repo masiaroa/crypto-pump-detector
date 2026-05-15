@@ -860,8 +860,37 @@ html, body {
 /* ── Mobile: stack to 1 column on narrow screens ── */
 @media (max-width: 420px) {
   .charts-grid { grid-template-columns: 1fr; grid-template-rows: repeat(4, 1fr); }
-  .crypto-base { font-size: 16px; }
   #nav-dots { display: none; }
+
+  /* Force the crypto-slide header onto a single row, shrinking elements
+     and collapsing the 2-row liquidation table into one inline line. */
+  .slide-header.crypto-header {
+    flex-wrap: nowrap;
+    gap: 5px;
+    padding: 4px 7px;
+    min-height: 38px;
+    overflow: hidden;
+  }
+  .crypto-title { gap: 4px; flex-shrink: 0; }
+  .crypto-meta  { gap: 4px; flex-wrap: nowrap; min-width: 0; }
+  .back-btn { padding: 2px 6px; font-size: 10px; }
+  .crypto-icon, .crypto-exchange { display: none; }
+  .crypto-base  { font-size: 14px; }
+  .crypto-price { font-size: 12px; }
+  .metric-chip { font-size: 10px; }
+  .tf-toggle { padding: 1px; }
+  .tf-btn { padding: 2px 6px; font-size: 10px; }
+
+  /* Flatten liq-summary: two <tr> become two inline pills on one line.
+     The "Longs/Shorts liquidated" labels collapse to a single L:/S: prefix. */
+  .liq-summary { border: 0; background: transparent; }
+  .liq-summary tbody { display: flex; gap: 6px; }
+  .liq-summary tr { display: inline-flex; align-items: center; gap: 2px; }
+  .liq-summary tr + tr th, .liq-summary tr + tr td { border-top: 0; }
+  .liq-summary th { display: none; }
+  .liq-summary td { padding: 0; font-size: 10px; }
+  .liq-summary tr:first-child td::before { content: "L"; color: #f85149; margin-right: 3px; font-weight: 700; }
+  .liq-summary tr:last-child td::before  { content: "S"; color: #3fb950; margin-right: 3px; font-weight: 700; }
 }
 """
 
