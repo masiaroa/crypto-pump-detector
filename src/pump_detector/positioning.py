@@ -71,7 +71,7 @@ def fetch_long_short_ratio(
 
 _BINANCE_PERIODS = {"1h": "1h", "4h": "4h", "1d": "1d"}
 _BYBIT_PERIODS = {"1h": "1h", "4h": "4h", "1d": "1d"}
-_OKX_PERIODS = {"1h": "1H", "4h": "4H", "1d": "1D"}
+_OKX_PERIODS = {"1h": "1H", "4h": "1H", "1d": "1D"}
 
 
 def _fetch_binance(market, period: str, http: requests.Session) -> LongShortRatio:

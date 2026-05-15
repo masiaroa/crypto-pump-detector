@@ -94,6 +94,8 @@ def test_fetch_long_short_ratio_okx_converts_ratio_to_pct():
     assert ratio.source == "okx"
     assert abs(ratio.long_pct - 0.6) < 1e-9
     assert abs(ratio.short_pct - 0.4) < 1e-9
+    # OKX's rubik endpoint only supports 5m/1H/1D — 4h maps down to 1H.
+    assert session.calls[0]["params"]["period"] == "1H"
 
 
 def test_fetch_long_short_ratio_returns_empty_when_all_providers_fail():
