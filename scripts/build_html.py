@@ -428,6 +428,15 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
                       symbol_to_slide: dict[str, int]) -> str:
     now_str = pd.Timestamp.now("Europe/Madrid").strftime("%Y-%m-%d %H:%M (Madrid)")
 
+    # Index the most recent event per symbol so the overview table can show
+    # "last activity" without needing a separate events table.
+    latest_event: dict[str, dict] = {}
+    for ev in events:
+        raw_sym = str(ev.get("raw_symbol", ""))
+        if not raw_sym or raw_sym in latest_event:
+            continue  # `events` is already sorted desc by timestamp
+        latest_event[raw_sym] = ev
+
     # Build overview rows — one row per known symbol. Signals are sorted to the top,
     # then OI/volume surges, then bullish score.
     overview_rows = []
@@ -437,6 +446,7 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
         oi_surge = bool(row.get("oi_surge_flag"))
         vol_surge = bool(row.get("volume_surge_flag"))
         priority = (3 if has_signal else 2 if oi_surge else 1 if vol_surge else 0)
+        ev = latest_event.get(sym, {})
         overview_rows.append({
             "symbol": sym,
             "slide_idx": slide_idx,
@@ -453,6 +463,8 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
             "funding": str(row.get("funding_classification", "UNKNOWN")),
             "long_pct": safe_float(row.get("long_account_ratio", 0)),
             "short_pct": safe_float(row.get("short_account_ratio", 0)),
+            "last_event_type": str(ev.get("event_type", "")),
+            "last_event_date": str(ev.get("timestamp", ""))[:10],
         })
     overview_rows.sort(key=lambda r: (-r["priority"], -r["bull"], r["symbol"]))
 
@@ -483,6 +495,20 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
         oi3_color = "#3fb950" if r["oi_3bar"] >= 0 else "#f85149"
         ls_label = format_long_short(r["long_pct"], r["short_pct"])
         ls_color = "#3fb950" if r["long_pct"] >= r["short_pct"] else "#f85149"
+        et = r["last_event_type"]
+        if et:
+            et_cls = {
+                "ENTRY": "et-entry",
+                "HOT_PRE_ENTRY": "et-hot",
+                "OI_SURGE": "et-oi",
+                "VOLUME_SURGE": "et-vol",
+            }.get(et, "et-pre")
+            last_event_cell = (
+                f'<span class="event-type-badge {et_cls}">{esc(et)}</span>'
+                f'<span class="event-date">&nbsp;{esc(r["last_event_date"])}</span>'
+            )
+        else:
+            last_event_cell = '<span class="muted">—</span>'
         overview_rows_html += f"""
           <tr>
             {sym_cell}
@@ -495,64 +521,19 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
             <td><span class="badge {funding_badge_class(r["funding"])}">{esc(r["funding"])}</span></td>
             <td style="color:{ls_color}">{esc(ls_label)}</td>
             <td class="sig-cell">{sig_chips}</td>
+            <td class="last-event-cell">{last_event_cell}</td>
           </tr>"""
 
     overview_table_html = ""
     if overview_rows_html:
         overview_table_html = f"""
         <div class="events-table-wrap">
-          <h3 class="section-label">Watchlist — click symbol to navigate · {signal_count} signal(s) · {surge_count} surge(s)</h3>
+          <h3 class="section-label">Watchlist — click symbol to navigate · {signal_count} signal(s) · {surge_count} surge(s) · {len(latest_event)} symbols with recent events</h3>
           <table class="overview-table">
             <thead>
-              <tr><th>Symbol</th><th>Price</th><th>Chg</th><th>Bull</th><th>Risk</th><th>OI&nbsp;3b</th><th>Vol&nbsp;3b</th><th>Funding</th><th>L/S</th><th>Signals</th></tr>
+              <tr><th>Symbol</th><th>Price</th><th>Chg</th><th>Bull</th><th>Risk</th><th>OI&nbsp;3b</th><th>Vol&nbsp;3b</th><th>Funding</th><th>L/S</th><th>Signals</th><th>Last&nbsp;event</th></tr>
             </thead>
             <tbody>{overview_rows_html}</tbody>
-          </table>
-        </div>"""
-
-    # Recent events table (kept under the main overview as secondary info)
-    event_rows_html = ""
-    for ev in events[:20]:
-        raw_sym   = str(ev.get("raw_symbol", ""))
-        sym_label = esc(ev.get("symbol", raw_sym))
-        slide_idx = symbol_to_slide.get(raw_sym, -1)
-        et     = str(ev.get("event_type", ""))
-        et_cls = {
-            "ENTRY": "et-entry",
-            "HOT_PRE_ENTRY": "et-hot",
-            "OI_SURGE": "et-oi",
-            "VOLUME_SURGE": "et-vol",
-        }.get(et, "et-pre")
-        ts   = str(ev.get("timestamp", ""))[:10]
-        bull = safe_float(ev.get("early_bullish_score", 0))
-        risk = safe_float(ev.get("blowoff_risk_score", 0))
-        fc   = str(ev.get("funding_classification", ""))
-
-        if slide_idx >= 0:
-            sym_cell = f'<td class="sym-cell sym-link" data-goto="{slide_idx}">{sym_label}</td>'
-        else:
-            sym_cell = f'<td class="sym-cell">{sym_label}</td>'
-
-        event_rows_html += f"""
-          <tr>
-            {sym_cell}
-            <td><span class="event-type-badge {et_cls}">{esc(et)}</span></td>
-            <td>{ts}</td>
-            <td style="color:{score_color(bull)}">{bull:.0f}</td>
-            <td style="color:#f85149">{risk:.0f}</td>
-            <td><span class="badge {funding_badge_class(fc)}">{esc(fc)}</span></td>
-          </tr>"""
-
-    events_table_html = ""
-    if event_rows_html:
-        events_table_html = f"""
-        <div class="events-table-wrap">
-          <h3 class="section-label">Recent Events</h3>
-          <table class="events-table">
-            <thead>
-              <tr><th>Symbol</th><th>Type</th><th>Date</th><th>Bull</th><th>Risk</th><th>Funding</th></tr>
-            </thead>
-            <tbody>{event_rows_html}</tbody>
           </table>
         </div>"""
 
@@ -567,7 +548,6 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
       </div>
       <div class="slide-body">
         {overview_table_html}
-        {events_table_html}
       </div>
     </section>"""
 
@@ -825,6 +805,9 @@ html, body {
 .sig-entry { background: #0d2a1a; color: #3fb950; }
 .sig-oi    { background: #1a2f4b; color: #79c0ff; }
 .sig-vol   { background: #2a1a4b; color: #d2a8ff; }
+.last-event-cell { white-space: nowrap; }
+.event-date { color: #6e7681; font-size: 10px; }
+.muted { color: #6e7681; }
 
 /* ── Charts 2x2 grid ── */
 .charts-grid {
