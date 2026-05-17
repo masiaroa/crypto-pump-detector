@@ -1,6 +1,47 @@
 import pytest
 
-from pump_detector.config import VALID_TIMEFRAMES, load_settings
+from pump_detector.config import VALID_TIMEFRAMES, load_settings, load_watchlist
+from pump_detector.symbols import normalize_symbol
+
+
+REQUIRED_WATCHLIST_BASES = {
+    "AAVE",
+    "ADA",
+    "APT",
+    "ARB",
+    "ATOM",
+    "AVAX",
+    "BCH",
+    "BTC",
+    "DOGE",
+    "DOT",
+    "ETC",
+    "ETH",
+    "FIL",
+    "S",
+    "HBAR",
+    "INJ",
+    "LINK",
+    "LTC",
+    "MANA",
+    "POL",
+    "NEAR",
+    "NEO",
+    "ONDO",
+    "OP",
+    "RUNE",
+    "SAND",
+    "SUI",
+    "SOL",
+    "TAO",
+    "TON",
+    "THETA",
+    "UNI",
+    "VIRTUAL",
+    "XLM",
+    "XRP",
+    "ZEC",
+}
 
 
 def test_load_settings_default_timeframes_include_4h_and_1d(monkeypatch):
@@ -8,6 +49,16 @@ def test_load_settings_default_timeframes_include_4h_and_1d(monkeypatch):
     monkeypatch.delenv("SCAN_TIMEFRAME", raising=False)
     settings = load_settings()
     assert settings.timeframes == ["4h", "1d"]
+
+
+def test_watchlist_includes_required_crypto_bases_as_supported_markets():
+    supported_bases = {
+        market.base
+        for market in (normalize_symbol(raw_symbol) for raw_symbol in load_watchlist())
+        if market.supported
+    }
+
+    assert REQUIRED_WATCHLIST_BASES <= supported_bases
 
 
 def test_scan_timeframe_env_overrides_yaml(monkeypatch):
@@ -52,4 +103,3 @@ def test_load_settings_includes_liquidation_defaults(monkeypatch):
     # WS burst + projected blocks were removed in favour of coinalyze-only.
     assert "executed" not in settings.liquidations
     assert "projected" not in settings.liquidations
-
