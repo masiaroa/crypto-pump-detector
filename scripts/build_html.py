@@ -596,6 +596,22 @@ def make_crypto_slide(
     icon      = "🟢" if scan_row.get("alert_triggered") else ("🟡" if scan_row.get("signal_active") else "⚪")
     canvas_id = f"s{idx}"
 
+    # Funding rate label chip
+    _fr_val   = safe_float(scan_row.get("funding_rate", 0))
+    _fr_cls   = str(scan_row.get("funding_classification", "UNKNOWN"))
+    _fr_bps   = _fr_val * 10000
+    _fr_sign  = "+" if _fr_bps >= 0 else ""
+    _fr_color = {
+        "NEGATIVE": "#79c0ff", "NEUTRAL": "#8b949e", "POSITIVE": "#e3b341",
+        "HOT": "#f97316", "EXTREME": "#f85149",
+    }.get(_fr_cls, "#6e7681")
+    funding_label_chip = (
+        f'<span style="color:{_fr_color};font-weight:600;margin-left:6px;">'
+        f'{_fr_sign}{_fr_bps:.2f} bps'
+        f'</span>'
+        f'<span style="color:{_fr_color};opacity:0.75;margin-left:4px;">·&nbsp;{esc(_fr_cls)}</span>'
+    )
+
     # TF toggle — show only when more than one TF is available; 1d first, then 4h
     available_tfs = sorted(candles_by_tf.keys(), key=lambda t: (t != "4h", t))
     tf_toggle_html = ""
@@ -655,7 +671,9 @@ def make_crypto_slide(
           <canvas id="vol-{canvas_id}"></canvas>
         </div>
         <div class="chart-box">
-          <div class="chart-label">Funding Rate (bps)</div>
+          <div class="chart-label" style="display:flex;align-items:baseline;gap:0;flex-wrap:wrap;">
+            <span>Funding Rate (bps)</span>{funding_label_chip}
+          </div>
           <canvas id="fr-{canvas_id}"></canvas>
         </div>
       </div>
@@ -833,6 +851,7 @@ html, body {
   font-size: 9px; font-weight: 700; text-transform: uppercase;
   color: #8b949e; margin-bottom: 3px; letter-spacing: 0.07em; flex-shrink: 0;
 }
+.chart-label span:first-child { letter-spacing: 0.07em; }
 .chart-box canvas { flex: 1; min-height: 0; display: block; width: 100% !important; }
 
 /* ── Nav dots ── */
@@ -1115,17 +1134,43 @@ STATIC_JS = r"""
   function fundingChart(id, points, xMin, xMax) {
     const canvas = document.getElementById(id);
     if (!canvas) return null;
-    const colors = points.map(p => p.y >= 0 ? '#d29922cc' : '#f85149cc');
+
+    // Classify each bar's intensity so we can colour like TradingView's
+    // "Aggregated Funding Rate": neutral=grey, positive=gold, hot=orange, negative=red.
+    function frColor(bps) {
+      if (bps < 0)   return '#f85149cc';  // negative  → red
+      if (bps <= 1)  return '#8b949ecc';  // ≤0.01%    → neutral grey
+      if (bps <= 5)  return '#e3b341cc';  // ≤0.05%    → gold
+      if (bps <= 10) return '#f97316cc';  // ≤0.10%    → orange
+      return '#ff4444cc';                 // >0.10%    → hot red
+    }
+    const colors = points.map(p => frColor(p.y));
+
+    // Zero baseline: make the y=0 gridline more visible
+    const yScale = deepClone(SCALE_Y);
+    yScale.grid = {
+      color:     (ctx) => ctx.tick.value === 0 ? 'rgba(139,148,158,0.55)' : 'rgba(48,54,61,0.6)',
+      lineWidth: (ctx) => ctx.tick.value === 0 ? 1.5 : 1,
+    };
+
     return new Chart(canvas.getContext('2d'), {
       type: 'bar',
-      data: { datasets: [{ data: points, backgroundColor: colors, borderWidth: 0 }] },
+      data: { datasets: [{ data: points, backgroundColor: colors, borderWidth: 0, borderRadius: 1 }] },
       options: {
         responsive: true, maintainAspectRatio: false, animation: { duration: 200 },
         plugins: {
           legend: { display: false },
-          tooltip: { callbacks: { label: (i) => (+i.raw.y).toFixed(2) + ' bps' } },
+          tooltip: {
+            callbacks: {
+              label: (i) => {
+                const bps = +i.raw.y;
+                const pct = (bps / 100).toFixed(4);
+                return `${bps >= 0 ? '+' : ''}${bps.toFixed(2)} bps  (${bps >= 0 ? '+' : ''}${pct}%)`;
+              },
+            },
+          },
         },
-        scales: { x: timeScale(xMin, xMax), y: deepClone(SCALE_Y) },
+        scales: { x: timeScale(xMin, xMax), y: yScale },
       },
     });
   }
