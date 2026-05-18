@@ -22,8 +22,13 @@ def scan_watchlist(
     snapshots: list[SignalSnapshot] = []
     details: dict[tuple[str, str], pd.DataFrame] = {}
 
-    for raw_symbol in symbols:
+    total = len(symbols)
+    print(f"[scan] {total} symbols × {len(settings.timeframes)} timeframes", flush=True)
+
+    for sym_idx, raw_symbol in enumerate(symbols, 1):
         market = normalize_symbol(raw_symbol)
+        ticker = raw_symbol.split(":")[-1].replace(".P", "")
+        print(f"[scan] [{sym_idx}/{total}] {ticker}", flush=True)
         if not market.supported:
             for timeframe in settings.timeframes:
                 snapshots.append(_unsupported_snapshot(raw_symbol, market.exchange, timeframe))

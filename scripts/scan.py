@@ -71,7 +71,7 @@ def _export_charts(details: dict, charts_dir: Path, ls_map: dict | None = None) 
         ls_points = (ls_map or {}).get((raw_symbol, timeframe), [])
         if ls_points:
             ts_to_ls = {p["timestamp_ms"]: p for p in ls_points}
-            ts_ms = pd.to_datetime(subset["timestamp"]).astype("int64") // 1_000_000
+            ts_ms = pd.to_datetime(subset["timestamp"]).astype("int64") // 1_000  # us → ms
             subset["ls_long"] = ts_ms.map(lambda ms: ts_to_ls.get(ms, {}).get("long_pct", 0.0))
             subset["ls_short"] = ts_ms.map(lambda ms: ts_to_ls.get(ms, {}).get("short_pct", 0.0))
 
@@ -184,31 +184,47 @@ def _export_event_history(details: dict, history_path: Path) -> None:
 
 
 if __name__ == "__main__":
+    import sys
+    def log(msg: str) -> None:
+        print(msg, flush=True)
+
     settings = load_settings()
     symbols = load_watchlist()
+    log(f"[scan] loaded {len(symbols)} symbols from watchlist")
 
     df, details = scan_watchlist(symbols=symbols, settings=settings, persist=True)
+    log(f"[scan] scan done — {len(details)} (symbol, tf) pairs")
 
     # Crowd positioning: top-trader long/short account ratio per symbol.
+    unique_syms = df["symbol"].nunique() if not df.empty else 0
+    log(f"[scan] fetching current L/S ratio for {unique_syms} symbols…")
     df = _enrich_with_long_short_ratio(df)
 
     # Latest scan CSV
     latest_csv = ROOT / "data" / "latest_scan.csv"
     latest_csv.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(latest_csv, index=False)
+    log(f"[scan] latest_scan.csv written ({len(df)} rows)")
 
     # Chart data for the HTML dashboard (with L/S history overlay)
+    log(f"[scan] fetching L/S history for {len(details)} (symbol, tf) pairs…")
     ls_map = _fetch_ls_history_map(details)
+    ls_ok = sum(1 for v in ls_map.values() if v)
+    log(f"[scan] L/S history: {ls_ok}/{len(ls_map)} pairs with data")
     _export_charts(details, ROOT / "data" / "charts", ls_map=ls_map)
+    log(f"[scan] chart JSONs written")
 
     # Liquidation overlays for the HTML dashboard. Coinalyze (free REST tier)
     # is the single source: missing key or blocked source degrades to empty
     # output so GitHub Pages still builds.
+    log(f"[scan] fetching liquidations for {len(details)} pairs…")
     liquidation_details = _fetch_liquidations_for_details(details, settings)
     _export_liquidations(liquidation_details, ROOT / "data" / "liquidations")
+    log(f"[scan] liquidations written ({len(liquidation_details)} pairs)")
 
     # Event history (used by both app.py and build_html.py)
     _export_event_history(details, ROOT / "data" / "event_history.csv")
+    log(f"[scan] event_history.csv written")
 
     print(
         df[
