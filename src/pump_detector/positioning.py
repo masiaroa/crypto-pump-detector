@@ -124,11 +124,11 @@ def _binance_ls_url_params(market, period: str, limit: int) -> tuple[str, dict]:
     period = _BINANCE_PERIODS.get(period, "4h")
     if market.quote == "USD":
         return (
-            "https://dapi.binance.com/futures/data/topLongShortAccountRatio",
+            "https://dapi.binance.com/futures/data/globalLongShortAccountRatio",
             {"pair": f"{market.base}USD", "period": period, "limit": min(limit, 500)},
         )
     return (
-        "https://fapi.binance.com/futures/data/topLongShortAccountRatio",
+        "https://fapi.binance.com/futures/data/globalLongShortAccountRatio",
         {"symbol": f"{market.base}USDT", "period": period, "limit": min(limit, 500)},
     )
 
