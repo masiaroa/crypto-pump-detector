@@ -671,8 +671,9 @@ def make_crypto_slide(
           <canvas id="vol-{canvas_id}"></canvas>
         </div>
         <div class="chart-box">
-          <div class="chart-label" style="display:flex;align-items:baseline;gap:0;flex-wrap:wrap;">
-            <span>Funding Rate (bps)</span>{funding_label_chip}
+          <div class="chart-label" style="display:flex;align-items:baseline;gap:0;flex-wrap:wrap;"
+               title="Aggregated across Bybit + Binance + Bitget (simple mean)">
+            <span>Funding Rate · Agg (bps)</span>{funding_label_chip}
           </div>
           <canvas id="fr-{canvas_id}"></canvas>
         </div>

@@ -89,7 +89,10 @@ def test_build_html_handles_placeholder_metrics_and_renders_market_header():
     assert "Bull&nbsp;" not in crypto_slide
     assert "Risk&nbsp;" not in crypto_slide
     assert "OI&nbsp;" not in crypto_slide
-    assert "NEGATIVE" not in crypto_slide
+    # NEGATIVE is allowed inside the funding chart label chip but must not
+    # leak back into the legacy header chips (Bull/Risk/OI/Funding row).
+    crypto_header = crypto_slide.split('charts-grid', 1)[0]
+    assert "NEGATIVE" not in crypto_header
 
 
 def test_build_html_daily_change_falls_back_to_scan_return_without_chart_ohlc():
