@@ -1196,6 +1196,37 @@ STATIC_JS = r"""
 
     const volChart = barChart   ('vol-' + id, volPoints, '#8b949e', xMin, xMax);
     const frChart  = fundingChart('fr-' + id, frPoints, xMin, xMax);
+
+    // L/S ratio overlay on price chart
+    const lsLongPts  = raw.filter(d => +d.ls_long  > 0).map(d => ({ x: Date.parse(d.timestamp), y: +d.ls_long  }));
+    const lsShortPts = raw.filter(d => +d.ls_short > 0).map(d => ({ x: Date.parse(d.timestamp), y: +d.ls_short }));
+    if (lsLongPts.length && priceChart) {
+      const lsDataset = (data, color) => ({
+        type: 'line',
+        data,
+        borderColor: color,
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.2,
+        yAxisID: 'yls',
+        order: 0,
+      });
+      priceChart.data.datasets.push(lsDataset(lsLongPts,  'rgba(63,185,80,0.7)'));
+      priceChart.data.datasets.push(lsDataset(lsShortPts, 'rgba(248,81,73,0.7)'));
+      priceChart.options.scales.yls = {
+        display: true,
+        position: 'left',
+        min: 0, max: 1,
+        ticks: {
+          color: '#6e7681', font: { size: 7 }, maxTicksLimit: 3,
+          callback: v => Math.round(v * 100) + '%',
+        },
+        grid: { display: false },
+      };
+      priceChart.update('none');
+    }
+
     slideEl._charts = { price: priceChart, oi: oiChart, vol: volChart, fr: frChart };
   }
 })();

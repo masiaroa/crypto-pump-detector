@@ -7,7 +7,7 @@ import pandas as pd
 
 from pump_detector.config import ROOT, load_settings, load_watchlist
 from pump_detector.liquidations import fetch_liquidation_map
-from pump_detector.positioning import fetch_long_short_ratio
+from pump_detector.positioning import fetch_long_short_history, fetch_long_short_ratio
 from pump_detector.scanner import scan_watchlist
 
 
@@ -41,7 +41,19 @@ def _enrich_with_long_short_ratio(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _export_charts(details: dict, charts_dir: Path) -> None:
+def _fetch_ls_history_map(details: dict) -> dict[tuple, list[dict]]:
+    """Return {(symbol, timeframe): [{timestamp_ms, long_pct, short_pct}, ...]}."""
+    cache: dict[tuple[str, str], list[dict]] = {}
+    result: dict[tuple, list[dict]] = {}
+    for raw_symbol, timeframe in details:
+        key = (raw_symbol, timeframe)
+        if key not in cache:
+            cache[key] = fetch_long_short_history(raw_symbol, period=timeframe)
+        result[key] = cache[key]
+    return result
+
+
+def _export_charts(details: dict, charts_dir: Path, ls_map: dict | None = None) -> None:
     """Export per-symbol historical candle data to JSON files for the HTML dashboard."""
     charts_dir.mkdir(parents=True, exist_ok=True)
     cols = [
@@ -54,6 +66,15 @@ def _export_charts(details: dict, charts_dir: Path) -> None:
         available = [c for c in cols if c in df.columns]
         subset = df[available].copy()
         subset["timestamp"] = subset["timestamp"].astype(str)
+
+        # Merge long/short history by timestamp (ms)
+        ls_points = (ls_map or {}).get((raw_symbol, timeframe), [])
+        if ls_points:
+            ts_to_ls = {p["timestamp_ms"]: p for p in ls_points}
+            ts_ms = pd.to_datetime(subset["timestamp"]).astype("int64") // 1_000_000
+            subset["ls_long"] = ts_ms.map(lambda ms: ts_to_ls.get(ms, {}).get("long_pct", 0.0))
+            subset["ls_short"] = ts_ms.map(lambda ms: ts_to_ls.get(ms, {}).get("short_pct", 0.0))
+
         out = {
             "symbol": raw_symbol,
             "timeframe": timeframe,
@@ -176,8 +197,9 @@ if __name__ == "__main__":
     latest_csv.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(latest_csv, index=False)
 
-    # Chart data for the HTML dashboard
-    _export_charts(details, ROOT / "data" / "charts")
+    # Chart data for the HTML dashboard (with L/S history overlay)
+    ls_map = _fetch_ls_history_map(details)
+    _export_charts(details, ROOT / "data" / "charts", ls_map=ls_map)
 
     # Liquidation overlays for the HTML dashboard. Coinalyze (free REST tier)
     # is the single source: missing key or blocked source degrades to empty
