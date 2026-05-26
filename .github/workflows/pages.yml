@@ -19,6 +19,8 @@ on:
       - "scripts/**"
       - "data/charts/**"
       - "data/liquidations/**"
+      - "data/latest_scan.csv"
+      - "data/event_history.csv"
 
 # Pages artifact deployment. Generated files are published without commits.
 permissions:
