@@ -823,7 +823,7 @@ html, body {
 .charts-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 3fr) minmax(0, 2fr) minmax(0, 1.2fr) minmax(0, 1.2fr);
+  grid-template-rows: minmax(0, 4.2fr) minmax(0, 1.6fr) minmax(0, 0.9fr) minmax(0, 0.9fr);
   grid-template-areas: "price" "oi" "volume" "funding";
   gap: 5px;
   flex: 1;
@@ -911,7 +911,7 @@ body.show-back-btn #back-to-overview { display: inline-flex; align-items: center
 @media (max-width: 420px) {
   .charts-grid {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 3fr) minmax(0, 2fr) minmax(0, 1.2fr) minmax(0, 1.2fr);
+    grid-template-rows: minmax(0, 4.2fr) minmax(0, 1.6fr) minmax(0, 0.9fr) minmax(0, 0.9fr);
   }
   #nav-dots { display: none; }
 
@@ -1095,14 +1095,20 @@ STATIC_JS = r"""
   // ── Shared scale / plugin defaults ──────────────────────────────────────
   function deepClone(o) { return JSON.parse(JSON.stringify(o)); }
 
-  function timeScale(min, max) {
-    return {
+  function timeScale(min, max, { showTicks = true } = {}) {
+    const scale = {
       type: 'time',
       min: min, max: max,
       time: { unit: 'day', displayFormats: { day: 'MMM d' } },
       ticks: { color: '#6e7681', font: { size: 8 }, maxTicksLimit: 5, maxRotation: 0 },
       grid:  { color: 'rgba(48,54,61,0.6)' },
     };
+    if (!showTicks) {
+      scale.ticks.display = false;
+      scale.grid.drawTicks = false;
+      scale.border = { display: false };
+    }
+    return scale;
   }
   const SCALE_Y = {
     display: true, position: 'right',
@@ -1325,7 +1331,7 @@ STATIC_JS = r"""
   }
 
   // ── Japanese candlestick chart (price or OI) ─────────────────────────────
-  function candleChart(id, candleData, xMin, xMax) {
+  function candleChart(id, candleData, xMin, xMax, { showXTicks = true } = {}) {
     const canvas = document.getElementById(id);
     if (!canvas || !candleData.length) return null;
     return new Chart(canvas.getContext('2d'), {
@@ -1354,7 +1360,7 @@ STATIC_JS = r"""
             },
           },
         },
-        scales: { x: timeScale(xMin, xMax), y: deepClone(SCALE_Y) },
+        scales: { x: timeScale(xMin, xMax, { showTicks: showXTicks }), y: deepClone(SCALE_Y) },
       },
     });
   }
@@ -1393,7 +1399,7 @@ STATIC_JS = r"""
       options: {
         responsive: true, maintainAspectRatio: false, animation: { duration: 200 },
         plugins: { legend: { display: false } },
-        scales: { x: timeScale(xMin, xMax), y: barYScale() },
+        scales: { x: timeScale(xMin, xMax, { showTicks: false }), y: barYScale() },
       },
     });
   }
@@ -1412,7 +1418,7 @@ STATIC_JS = r"""
           legend: { display: false },
           tooltip: { callbacks: { label: (i) => (+i.raw.y).toFixed(2) + ' bps' } },
         },
-        scales: { x: timeScale(xMin, xMax), y: barYScale({ symmetric: true }) },
+        scales: { x: timeScale(xMin, xMax, { showTicks: false }), y: barYScale({ symmetric: true }) },
       },
     });
   }
@@ -1447,7 +1453,7 @@ STATIC_JS = r"""
     if (!priceCandles.length) return;
     const xMin = priceCandles[0].x;
     const xMax = priceCandles[priceCandles.length - 1].x;
-    const priceChart = candleChart('price-' + id, priceCandles, xMin, xMax);
+    const priceChart = candleChart('price-' + id, priceCandles, xMin, xMax, { showXTicks: true });
 
     // OI candlestick — uses oi_open/high/low/close when available
     let oiChart;
@@ -1456,7 +1462,7 @@ STATIC_JS = r"""
       const oiCandles = raw
         .filter(d => +d.oi_open > 0)
         .map(d => ({ x: Date.parse(d.timestamp), o: +d.oi_open, h: +d.oi_high, l: +d.oi_low, c: +(d.oi_close || d.open_interest) }));
-      oiChart = candleChart('oi-' + id, oiCandles, xMin, xMax);
+      oiChart = candleChart('oi-' + id, oiCandles, xMin, xMax, { showXTicks: false });
     } else {
       // Fallback: simple line with open_interest, also pinned to the price range
       const oiPoints = raw
@@ -1469,7 +1475,7 @@ STATIC_JS = r"""
         options: {
           responsive: true, maintainAspectRatio: false, animation: { duration: 200 },
           plugins: { legend: { display: false } },
-          scales: { x: timeScale(xMin, xMax), y: deepClone(SCALE_Y) },
+          scales: { x: timeScale(xMin, xMax, { showTicks: false }), y: deepClone(SCALE_Y) },
         },
       });
     }

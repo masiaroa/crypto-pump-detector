@@ -206,8 +206,18 @@ def test_build_html_uses_vertical_desktop_chart_stack_with_compact_lower_panes()
     assert 'class="chart-box vol-box"' in html
     assert 'class="chart-box funding-box"' in html
     assert "grid-template-columns: minmax(0, 1fr);" in html
-    assert "grid-template-rows: minmax(0, 3fr) minmax(0, 2fr) minmax(0, 1.2fr) minmax(0, 1.2fr);" in html
+    assert "grid-template-rows: minmax(0, 4.2fr) minmax(0, 1.6fr) minmax(0, 0.9fr) minmax(0, 0.9fr);" in html
     assert 'grid-template-areas: "price" "oi" "volume" "funding";' in html
+
+
+def test_build_html_hides_repeated_time_labels_on_lower_charts():
+    html = build_html([], {}, charts={})
+
+    assert "function timeScale(min, max, { showTicks = true } = {})" in html
+    assert "ticks.display = false;" in html
+    assert "candleChart('price-' + id, priceCandles, xMin, xMax, { showXTicks: true })" in html
+    assert "candleChart('oi-' + id, oiCandles, xMin, xMax, { showXTicks: false })" in html
+    assert "timeScale(xMin, xMax, { showTicks: false })" in html
 
 
 def test_build_html_makes_volume_and_funding_bars_more_readable():
