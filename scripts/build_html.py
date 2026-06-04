@@ -134,7 +134,7 @@ def _normalize_liqs_input(liquidations: dict) -> dict[str, dict[str, dict[str, f
     return result
 
 
-_MAX_CANDLES: dict[str, int] = {"1d": 548, "4h": 3288, "1h": 360}
+_MAX_CANDLES: dict[str, int] = {"1d": 244, "4h": 528, "1h": 360}
 
 
 def load_charts() -> dict[str, dict[str, list]]:
@@ -819,7 +819,7 @@ html, body {
 .charts-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 3fr) minmax(0, 2fr) minmax(0, 0.8fr) minmax(0, 0.8fr);
+  grid-template-rows: minmax(0, 3fr) minmax(0, 2fr) minmax(0, 1.2fr) minmax(0, 1.2fr);
   grid-template-areas: "price" "oi" "volume" "funding";
   gap: 5px;
   flex: 1;
@@ -887,7 +887,7 @@ body.show-back-btn #back-to-overview { display: inline-flex; align-items: center
 @media (max-width: 420px) {
   .charts-grid {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 3fr) minmax(0, 2fr) minmax(0, 0.8fr) minmax(0, 0.8fr);
+    grid-template-rows: minmax(0, 3fr) minmax(0, 2fr) minmax(0, 1.2fr) minmax(0, 1.2fr);
   }
   #nav-dots { display: none; }
 
@@ -1105,16 +1105,40 @@ STATIC_JS = r"""
   }
 
   // ── Bar chart on a time axis (volume) ────────────────────────────────────
+  function compactBarDataset(points, colors) {
+    return {
+      data: points,
+      backgroundColor: colors,
+      borderWidth: 0,
+      barPercentage: 1.0,
+      categoryPercentage: 1.0,
+      minBarLength: 2,
+    };
+  }
+
+  function barYScale({ symmetric = false } = {}) {
+    const scale = deepClone(SCALE_Y);
+    scale.ticks.maxTicksLimit = 3;
+    scale.grace = '8%';
+    if (symmetric) {
+      scale.suggestedMin = -1;
+      scale.suggestedMax = 1;
+    } else {
+      scale.beginAtZero = true;
+    }
+    return scale;
+  }
+
   function barChart(id, points, color, xMin, xMax) {
     const canvas = document.getElementById(id);
     if (!canvas) return null;
     return new Chart(canvas.getContext('2d'), {
       type: 'bar',
-      data: { datasets: [{ data: points, backgroundColor: color + 'cc', borderWidth: 0 }] },
+      data: { datasets: [compactBarDataset(points, color + 'cc')] },
       options: {
         responsive: true, maintainAspectRatio: false, animation: { duration: 200 },
         plugins: { legend: { display: false } },
-        scales: { x: timeScale(xMin, xMax), y: deepClone(SCALE_Y) },
+        scales: { x: timeScale(xMin, xMax), y: barYScale() },
       },
     });
   }
@@ -1126,14 +1150,14 @@ STATIC_JS = r"""
     const colors = points.map(p => p.y >= 0 ? '#d29922cc' : '#f85149cc');
     return new Chart(canvas.getContext('2d'), {
       type: 'bar',
-      data: { datasets: [{ data: points, backgroundColor: colors, borderWidth: 0 }] },
+      data: { datasets: [compactBarDataset(points, colors)] },
       options: {
         responsive: true, maintainAspectRatio: false, animation: { duration: 200 },
         plugins: {
           legend: { display: false },
           tooltip: { callbacks: { label: (i) => (+i.raw.y).toFixed(2) + ' bps' } },
         },
-        scales: { x: timeScale(xMin, xMax), y: deepClone(SCALE_Y) },
+        scales: { x: timeScale(xMin, xMax), y: barYScale({ symmetric: true }) },
       },
     });
   }

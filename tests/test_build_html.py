@@ -159,7 +159,7 @@ def test_build_html_embeds_multi_timeframe_chart_data_and_toggle():
     assert "slide.dataset.currentTf" in html
 
 
-def test_load_charts_keeps_eighteen_month_windows(monkeypatch, tmp_path):
+def test_load_charts_keeps_eight_month_daily_and_shorter_proportional_4h_windows(monkeypatch, tmp_path):
     charts_dir = tmp_path / "charts"
     charts_dir.mkdir()
     daily_rows = [{"timestamp": f"2025-01-{(i % 28) + 1:02d}", "close": i} for i in range(600)]
@@ -176,10 +176,10 @@ def test_load_charts_keeps_eighteen_month_windows(monkeypatch, tmp_path):
 
     charts = build_html_module.load_charts()
 
-    assert len(charts["BYBIT:BTCUSDT.P"]["1d"]) == 548
-    assert charts["BYBIT:BTCUSDT.P"]["1d"][0]["close"] == 52
-    assert len(charts["BYBIT:BTCUSDT.P"]["4h"]) == 3288
-    assert charts["BYBIT:BTCUSDT.P"]["4h"][0]["close"] == 112
+    assert len(charts["BYBIT:BTCUSDT.P"]["1d"]) == 244
+    assert charts["BYBIT:BTCUSDT.P"]["1d"][0]["close"] == 356
+    assert len(charts["BYBIT:BTCUSDT.P"]["4h"]) == 528
+    assert charts["BYBIT:BTCUSDT.P"]["4h"][0]["close"] == 2872
 
 
 def test_build_html_uses_vertical_desktop_chart_stack_with_compact_lower_panes():
@@ -206,8 +206,17 @@ def test_build_html_uses_vertical_desktop_chart_stack_with_compact_lower_panes()
     assert 'class="chart-box vol-box"' in html
     assert 'class="chart-box funding-box"' in html
     assert "grid-template-columns: minmax(0, 1fr);" in html
-    assert "grid-template-rows: minmax(0, 3fr) minmax(0, 2fr) minmax(0, 0.8fr) minmax(0, 0.8fr);" in html
+    assert "grid-template-rows: minmax(0, 3fr) minmax(0, 2fr) minmax(0, 1.2fr) minmax(0, 1.2fr);" in html
     assert 'grid-template-areas: "price" "oi" "volume" "funding";' in html
+
+
+def test_build_html_makes_volume_and_funding_bars_more_readable():
+    html = build_html([], {}, charts={})
+
+    assert "function compactBarDataset(points, colors)" in html
+    assert "barPercentage: 1.0" in html
+    assert "categoryPercentage: 1.0" in html
+    assert "minBarLength: 2" in html
 
 
 def test_build_html_overview_table_lists_all_symbols_with_clickable_tickers():

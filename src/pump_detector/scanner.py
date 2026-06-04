@@ -11,18 +11,15 @@ from .storage import append_snapshots
 from .symbols import normalize_symbol
 
 
-EIGHTEEN_MONTH_DAILY_CANDLES = 548
-_CANDLES_PER_DAY = {"1d": 1, "4h": 6}
+EIGHT_MONTH_DAILY_CANDLES = 244
+_DEFAULT_TIMEFRAME_LIMITS = {"1d": EIGHT_MONTH_DAILY_CANDLES, "4h": 528}
 _LEGACY_DEFAULT_LIMIT = 260
 
 
 def _limit_for_timeframe(timeframe: str, explicit_limit: int | None = None) -> int:
     if explicit_limit is not None:
         return explicit_limit
-    per_day = _CANDLES_PER_DAY.get(timeframe)
-    if per_day:
-        return EIGHTEEN_MONTH_DAILY_CANDLES * per_day
-    return _LEGACY_DEFAULT_LIMIT
+    return _DEFAULT_TIMEFRAME_LIMITS.get(timeframe, _LEGACY_DEFAULT_LIMIT)
 
 
 def scan_watchlist(

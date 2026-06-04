@@ -79,7 +79,7 @@ def _coinalyze_interval(timeframe: str) -> str:
 def _lookback_seconds(timeframe: str) -> int:
     # Coinalyze keeps 1500-2000 datapoints for intraday timeframes, so we
     # request a generous window aligned with what the chart shows.
-    return {"1h": 7 * 24 * 3600, "4h": 30 * 24 * 3600, "1d": 180 * 24 * 3600}.get(
+    return {"1h": 7 * 24 * 3600, "4h": 88 * 24 * 3600, "1d": 244 * 24 * 3600}.get(
         timeframe, 7 * 24 * 3600
     )
 
