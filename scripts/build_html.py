@@ -617,6 +617,8 @@ def make_crypto_slide(
     # render a floating "← Overview" button instead of taking header space.
     # The existing click handler syncs all .tf-btn copies within a slide.
     tf_overlay_html = tf_toggle_html.replace('class="tf-toggle"', 'class="tf-toggle tf-toggle-overlay"', 1)
+    zoom_reset_html = '<button class="zoom-reset" title="Reset zoom" aria-label="Reset zoom">&#8596;</button>'
+    zoom_reset_overlay_html = '<button class="zoom-reset zoom-reset-overlay" title="Reset zoom" aria-label="Reset zoom">&#8596;</button>'
 
     return f"""
     <section class="slide" id="slide-{idx}" data-idx="{idx}" data-symbol="{esc(symbol)}" data-default-tf="{esc(default_tf)}" {liq_data_attrs}>
@@ -638,12 +640,14 @@ def make_crypto_slide(
             </tbody>
           </table>
           {tf_toggle_html}
+          {zoom_reset_html}
         </div>
       </div>
       <div class="charts-grid">
         <div class="chart-box price-box">
           <div class="chart-label">Price</div>
           {tf_overlay_html}
+          {zoom_reset_overlay_html}
           <canvas id="price-{canvas_id}"></canvas>
         </div>
         <div class="chart-box oi-box">
@@ -829,6 +833,7 @@ html, body {
 .chart-box {
   background: #161b22; border: 1px solid #30363d; border-radius: 6px;
   padding: 7px; display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+  position: relative;
 }
 .price-box { grid-area: price; }
 .oi-box { grid-area: oi; }
@@ -838,7 +843,26 @@ html, body {
   font-size: 9px; font-weight: 700; text-transform: uppercase;
   color: #8b949e; margin-bottom: 3px; letter-spacing: 0.07em; flex-shrink: 0;
 }
-.chart-box canvas { flex: 1; min-height: 0; display: block; width: 100% !important; }
+.chart-box canvas { flex: 1; min-height: 0; display: block; width: 100% !important; cursor: crosshair; }
+.zoom-reset {
+  background: #21262d; color: #8b949e; border: 1px solid #30363d;
+  width: 28px; height: 26px; border-radius: 6px;
+  font-size: 13px; font-weight: 800; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer;
+}
+.zoom-reset:hover { color: #58a6ff; border-color: #58a6ff; background: #30363d; }
+.zoom-reset-overlay { display: none; }
+.zoom-selection {
+  display: none;
+  position: absolute;
+  z-index: 6;
+  pointer-events: none;
+  background: rgba(88,166,255,0.18);
+  border: 1px solid rgba(88,166,255,0.9);
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px rgba(88,166,255,0.18);
+}
 
 /* ── Nav dots ── */
 #nav-dots {
@@ -894,7 +918,8 @@ body.show-back-btn #back-to-overview { display: inline-flex; align-items: center
   /* Header on mobile: no back button, no inline TF toggle — those move to
      a floating button and a chart overlay respectively to free up space. */
   .crypto-header > .crypto-title > .back-btn,
-  .crypto-header > .crypto-meta  > .tf-toggle { display: none; }
+  .crypto-header > .crypto-meta  > .tf-toggle,
+  .crypto-header > .crypto-meta  > .zoom-reset { display: none; }
 
   .slide-header.crypto-header {
     flex-wrap: nowrap;
@@ -932,6 +957,15 @@ body.show-back-btn #back-to-overview { display: inline-flex; align-items: center
     backdrop-filter: blur(2px);
   }
   .tf-toggle-overlay .tf-btn { padding: 2px 8px; font-size: 10px; }
+  .zoom-reset-overlay {
+    display: inline-flex;
+    position: absolute;
+    top: 4px; right: 76px;
+    z-index: 5;
+    width: 26px; height: 22px;
+    background: rgba(13,17,23,0.85);
+    backdrop-filter: blur(2px);
+  }
 }
 """
 
@@ -1029,6 +1063,13 @@ STATIC_JS = r"""
 
   // ── TF toggle handler — syncs all slides ────────────────────────────────
   slidesEl.addEventListener('click', (e) => {
+    const resetBtn = e.target.closest('.zoom-reset');
+    if (resetBtn) {
+      const slide = resetBtn.closest('.slide');
+      if (slide) resetZoom(slide);
+      return;
+    }
+
     const btn = e.target.closest('.tf-btn');
     if (!btn) return;
     const clickedSlide = btn.closest('.slide');
@@ -1068,6 +1109,220 @@ STATIC_JS = r"""
     ticks: { color: '#6e7681', font: { size: 8 }, maxTicksLimit: 4 },
     grid:  { color: 'rgba(48,54,61,0.6)' },
   };
+
+  function chartsForSlide(slideEl) {
+    return slideEl && slideEl._charts
+      ? Object.values(slideEl._charts).filter(Boolean)
+      : [];
+  }
+
+  function finiteValue(v) {
+    const n = +v;
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function pointValues(raw) {
+    if (!raw || typeof raw !== 'object') return [];
+    const values = [];
+    ['y', 'o', 'h', 'l', 'c'].forEach(key => {
+      const value = finiteValue(raw[key]);
+      if (value !== null) values.push(value);
+    });
+    return values;
+  }
+
+  function valueRangeForDataset(dataset, min, max) {
+    const values = [];
+    (dataset.data || []).forEach(raw => {
+      const x = finiteValue(raw && raw.x);
+      if (x === null || x < min || x > max) return;
+      values.push(...pointValues(raw));
+    });
+    return values;
+  }
+
+  function setVisibleYScale(chart, min, max) {
+    if (!chart || !chart.options || !chart.options.scales) return;
+    Object.entries(chart.options.scales).forEach(([scaleId, scale]) => {
+      if (scaleId === 'x') return;
+      if (scaleId === 'yls') {
+        scale.min = 0;
+        scale.max = 1;
+        return;
+      }
+
+      const values = [];
+      (chart.data.datasets || []).forEach(dataset => {
+        const axisId = dataset.yAxisID || 'y';
+        if (axisId !== scaleId) return;
+        values.push(...valueRangeForDataset(dataset, min, max));
+      });
+      if (!values.length) return;
+
+      const rawLow = Math.min(...values);
+      const rawHigh = Math.max(...values);
+      let low = rawLow;
+      let high = rawHigh;
+      if (!Number.isFinite(low) || !Number.isFinite(high)) return;
+      if (low === high) {
+        const bump = Math.max(Math.abs(high) * 0.05, 1);
+        low -= bump;
+        high += bump;
+      }
+      const span = high - low;
+      low -= span * 0.08;
+      high += span * 0.08;
+
+      const includeZero = chart.config.type === 'bar' || scale.beginAtZero;
+      if (includeZero && rawLow >= 0) low = 0;
+      if (includeZero && rawHigh <= 0) high = 0;
+
+      delete scale.suggestedMin;
+      delete scale.suggestedMax;
+      scale.min = low;
+      scale.max = high;
+    });
+  }
+
+  function applyZoomRange(slideEl, min, max) {
+    if (!slideEl || !Number.isFinite(min) || !Number.isFinite(max)) return;
+    const full = slideEl._fullRange || { min, max };
+    let lo = Math.max(full.min, Math.min(min, max));
+    let hi = Math.min(full.max, Math.max(min, max));
+    if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return;
+
+    slideEl._zoomRange = { min: lo, max: hi };
+    chartsForSlide(slideEl).forEach(chart => {
+      if (!chart.options.scales || !chart.options.scales.x) return;
+      chart.options.scales.x.min = lo;
+      chart.options.scales.x.max = hi;
+      setVisibleYScale(chart, lo, hi);
+      chart.update('none');
+    });
+    slideEl.querySelectorAll('.zoom-selection').forEach(hideZoomSelection);
+  }
+
+  function resetZoom(slideEl) {
+    if (!slideEl || !slideEl._fullRange) return;
+    const full = slideEl._fullRange;
+    slideEl._zoomRange = null;
+    chartsForSlide(slideEl).forEach(chart => {
+      if (!chart.options.scales || !chart.options.scales.x) return;
+      chart.options.scales.x.min = full.min;
+      chart.options.scales.x.max = full.max;
+      Object.entries(chart.options.scales).forEach(([scaleId, scale]) => {
+        if (scaleId === 'x') return;
+        if (scaleId === 'yls') {
+          scale.min = 0;
+          scale.max = 1;
+          return;
+        }
+        delete scale.min;
+        delete scale.max;
+      });
+      chart.update('none');
+    });
+    slideEl.querySelectorAll('.zoom-selection').forEach(hideZoomSelection);
+  }
+
+  function zoomSelectionBox(chart) {
+    const parent = chart.canvas.parentElement;
+    let selection = parent.querySelector('.zoom-selection');
+    if (!selection) {
+      selection = document.createElement('div');
+      selection.className = 'zoom-selection';
+      parent.appendChild(selection);
+    }
+    return selection;
+  }
+
+  function positionZoomSelection(chart, selection, startX, currentX) {
+    if (!chart || !selection) return;
+    const canvasBox = chart.canvas.getBoundingClientRect();
+    const parentBox = chart.canvas.parentElement.getBoundingClientRect();
+    const area = chart.chartArea;
+    const leftBound = canvasBox.left + area.left;
+    const rightBound = canvasBox.left + area.right;
+    const top = canvasBox.top + area.top - parentBox.top;
+    const height = Math.max(0, area.bottom - area.top);
+    const x1 = Math.max(leftBound, Math.min(rightBound, startX));
+    const x2 = Math.max(leftBound, Math.min(rightBound, currentX));
+    selection.style.display = 'block';
+    selection.style.left = (Math.min(x1, x2) - parentBox.left) + 'px';
+    selection.style.top = top + 'px';
+    selection.style.width = Math.abs(x2 - x1) + 'px';
+    selection.style.height = height + 'px';
+  }
+
+  function hideZoomSelection(selection) {
+    if (!selection) return;
+    selection.style.display = 'none';
+  }
+
+  function attachZoomSelection(slideEl, chart) {
+    if (!slideEl || !chart || !chart.canvas || chart.canvas._zoomSelectionAttached) return;
+    const canvas = chart.canvas;
+    canvas._zoomSelectionAttached = true;
+    let drag = null;
+
+    function activeChart() {
+      return Chart.getChart(canvas) || chart;
+    }
+
+    function xValueForClientX(active, clientX) {
+      const canvasBox = canvas.getBoundingClientRect();
+      const area = active.chartArea;
+      const pixel = Math.max(area.left, Math.min(area.right, clientX - canvasBox.left));
+      return active.scales.x.getValueForPixel(pixel);
+    }
+
+    function finishDrag(e, commit) {
+      if (!drag) return;
+      const active = activeChart();
+      const width = Math.abs((e && e.clientX !== undefined ? e.clientX : drag.currentX) - drag.startX);
+      if (commit && active && active.scales && active.scales.x && width >= 8) {
+        const min = xValueForClientX(active, drag.startX);
+        const max = xValueForClientX(active, e.clientX);
+        applyZoomRange(slideEl, min, max);
+      } else {
+        hideZoomSelection(drag.selection);
+      }
+      try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+      drag = null;
+    }
+
+    canvas.addEventListener('pointerdown', (e) => {
+      if (e.pointerType && e.pointerType !== 'mouse') return;
+      if (e.button !== 0) return;
+      const active = activeChart();
+      if (!active || !active.scales || !active.scales.x) return;
+      const canvasBox = canvas.getBoundingClientRect();
+      const area = active.chartArea;
+      const leftBound = canvasBox.left + area.left;
+      const rightBound = canvasBox.left + area.right;
+      if (e.clientX < leftBound || e.clientX > rightBound) return;
+      e.preventDefault();
+      e.stopPropagation();
+      drag = {
+        startX: e.clientX,
+        currentX: e.clientX,
+        selection: zoomSelectionBox(active),
+      };
+      positionZoomSelection(active, drag.selection, drag.startX, drag.currentX);
+      try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+    });
+
+    canvas.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      e.preventDefault();
+      const active = activeChart();
+      drag.currentX = e.clientX;
+      positionZoomSelection(active, drag.selection, drag.startX, drag.currentX);
+    });
+
+    canvas.addEventListener('pointerup', (e) => finishDrag(e, true));
+    canvas.addEventListener('pointercancel', (e) => finishDrag(e, false));
+  }
 
   // ── Japanese candlestick chart (price or OI) ─────────────────────────────
   function candleChart(id, candleData, xMin, xMax) {
@@ -1260,6 +1515,9 @@ STATIC_JS = r"""
     }
 
     slideEl._charts = { price: priceChart, oi: oiChart, vol: volChart, fr: frChart };
+    slideEl._fullRange = { min: xMin, max: xMax };
+    slideEl._zoomRange = null;
+    chartsForSlide(slideEl).forEach(chart => attachZoomSelection(slideEl, chart));
   }
 })();
 """

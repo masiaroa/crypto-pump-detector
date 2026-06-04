@@ -219,6 +219,35 @@ def test_build_html_makes_volume_and_funding_bars_more_readable():
     assert "minBarLength: 2" in html
 
 
+def test_build_html_includes_drag_zoom_selection_and_reset_controls():
+    charts = {
+        "BYBIT:BTCUSDT.P": {
+            "4h": [
+                {
+                    "timestamp": "2026-05-12 04:00:00+00:00",
+                    "open": 104,
+                    "high": 108,
+                    "low": 101,
+                    "close": 107,
+                    "volume": 400,
+                    "funding_rate": 0.0001,
+                }
+            ]
+        }
+    }
+
+    html = build_html([], {}, charts=charts)
+    crypto_slide = html.split('id="slide-1"', 1)[1]
+
+    assert 'class="zoom-reset"' in crypto_slide
+    assert 'class="zoom-reset zoom-reset-overlay"' in crypto_slide
+    assert ".zoom-selection" in html
+    assert "function attachZoomSelection(slideEl, chart)" in html
+    assert "function applyZoomRange(slideEl, min, max)" in html
+    assert "function setVisibleYScale(chart, min, max)" in html
+    assert "Chart.getChart(canvas)" in html
+
+
 def test_build_html_overview_table_lists_all_symbols_with_clickable_tickers():
     """First slide must show every watchlist symbol, even without signal."""
     charts = {
