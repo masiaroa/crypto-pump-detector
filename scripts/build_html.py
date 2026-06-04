@@ -134,7 +134,7 @@ def _normalize_liqs_input(liquidations: dict) -> dict[str, dict[str, dict[str, f
     return result
 
 
-_MAX_CANDLES: dict[str, int] = {"1d": 120, "4h": 260, "1h": 360}
+_MAX_CANDLES: dict[str, int] = {"1d": 548, "4h": 3288, "1h": 360}
 
 
 def load_charts() -> dict[str, dict[str, list]]:
@@ -646,15 +646,15 @@ def make_crypto_slide(
           {tf_overlay_html}
           <canvas id="price-{canvas_id}"></canvas>
         </div>
-        <div class="chart-box">
+        <div class="chart-box oi-box">
           <div class="chart-label">Open Interest</div>
           <canvas id="oi-{canvas_id}"></canvas>
         </div>
-        <div class="chart-box">
+        <div class="chart-box vol-box">
           <div class="chart-label">Volume</div>
           <canvas id="vol-{canvas_id}"></canvas>
         </div>
-        <div class="chart-box">
+        <div class="chart-box funding-box">
           <div class="chart-label">Funding Rate (bps)</div>
           <canvas id="fr-{canvas_id}"></canvas>
         </div>
@@ -815,11 +815,12 @@ html, body {
 .event-date { color: #6e7681; font-size: 10px; }
 .muted { color: #6e7681; }
 
-/* ── Charts 2x2 grid ── */
+/* ── Charts vertical stack ── */
 .charts-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  grid-template-rows: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 3fr) minmax(0, 2fr) minmax(0, 0.8fr) minmax(0, 0.8fr);
+  grid-template-areas: "price" "oi" "volume" "funding";
   gap: 5px;
   flex: 1;
   padding: 5px;
@@ -829,6 +830,10 @@ html, body {
   background: #161b22; border: 1px solid #30363d; border-radius: 6px;
   padding: 7px; display: flex; flex-direction: column; min-height: 0; overflow: hidden;
 }
+.price-box { grid-area: price; }
+.oi-box { grid-area: oi; }
+.vol-box { grid-area: volume; padding-top: 5px; padding-bottom: 5px; }
+.funding-box { grid-area: funding; padding-top: 5px; padding-bottom: 5px; }
 .chart-label {
   font-size: 9px; font-weight: 700; text-transform: uppercase;
   color: #8b949e; margin-bottom: 3px; letter-spacing: 0.07em; flex-shrink: 0;
@@ -878,9 +883,12 @@ html, body {
 #back-to-overview:hover { background: #30363d; color: #79c0ff; border-color: #58a6ff; }
 body.show-back-btn #back-to-overview { display: inline-flex; align-items: center; }
 
-/* ── Mobile: stack to 1 column on narrow screens ── */
+/* ── Mobile: keep the same vertical reading order on narrow screens ── */
 @media (max-width: 420px) {
-  .charts-grid { grid-template-columns: 1fr; grid-template-rows: repeat(4, 1fr); }
+  .charts-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 3fr) minmax(0, 2fr) minmax(0, 0.8fr) minmax(0, 0.8fr);
+  }
   #nav-dots { display: none; }
 
   /* Header on mobile: no back button, no inline TF toggle — those move to

@@ -151,12 +151,63 @@ def test_build_html_embeds_multi_timeframe_chart_data_and_toggle():
 
     html = build_html([], {}, charts=charts)
 
-    assert 'data-default-tf="1d"' in html
-    assert 'class="tf-btn active" data-tf="1d"' in html
-    assert 'class="tf-btn" data-tf="4h"' in html
+    assert 'data-default-tf="4h"' in html
+    assert 'class="tf-btn active" data-tf="4h"' in html
+    assert 'class="tf-btn" data-tf="1d"' in html
     assert '"BYBIT:BTCUSDT.P":{"1d":[{' in html
     assert '"4h":[{' in html
     assert "slide.dataset.currentTf" in html
+
+
+def test_load_charts_keeps_eighteen_month_windows(monkeypatch, tmp_path):
+    charts_dir = tmp_path / "charts"
+    charts_dir.mkdir()
+    daily_rows = [{"timestamp": f"2025-01-{(i % 28) + 1:02d}", "close": i} for i in range(600)]
+    four_hour_rows = [{"timestamp": f"2025-01-01 {i % 24:02d}:00:00+00:00", "close": i} for i in range(3400)]
+    charts_dir.joinpath("BYBIT_BTCUSDT_P_1d.json").write_text(
+        '{"symbol":"BYBIT:BTCUSDT.P","timeframe":"1d","data":' + __import__("json").dumps(daily_rows) + "}",
+        encoding="utf-8",
+    )
+    charts_dir.joinpath("BYBIT_BTCUSDT_P_4h.json").write_text(
+        '{"symbol":"BYBIT:BTCUSDT.P","timeframe":"4h","data":' + __import__("json").dumps(four_hour_rows) + "}",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(build_html_module, "CHARTS_DIR", charts_dir)
+
+    charts = build_html_module.load_charts()
+
+    assert len(charts["BYBIT:BTCUSDT.P"]["1d"]) == 548
+    assert charts["BYBIT:BTCUSDT.P"]["1d"][0]["close"] == 52
+    assert len(charts["BYBIT:BTCUSDT.P"]["4h"]) == 3288
+    assert charts["BYBIT:BTCUSDT.P"]["4h"][0]["close"] == 112
+
+
+def test_build_html_uses_vertical_desktop_chart_stack_with_compact_lower_panes():
+    charts = {
+        "BYBIT:BTCUSDT.P": {
+            "4h": [
+                {
+                    "timestamp": "2026-05-12 04:00:00+00:00",
+                    "open": 104,
+                    "high": 108,
+                    "low": 101,
+                    "close": 107,
+                    "volume": 400,
+                    "funding_rate": 0.0001,
+                }
+            ]
+        }
+    }
+
+    html = build_html([], {}, charts=charts)
+
+    assert 'class="chart-box price-box"' in html
+    assert 'class="chart-box oi-box"' in html
+    assert 'class="chart-box vol-box"' in html
+    assert 'class="chart-box funding-box"' in html
+    assert "grid-template-columns: minmax(0, 1fr);" in html
+    assert "grid-template-rows: minmax(0, 3fr) minmax(0, 2fr) minmax(0, 0.8fr) minmax(0, 0.8fr);" in html
+    assert 'grid-template-areas: "price" "oi" "volume" "funding";' in html
 
 
 def test_build_html_overview_table_lists_all_symbols_with_clickable_tickers():

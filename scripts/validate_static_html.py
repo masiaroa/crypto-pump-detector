@@ -54,14 +54,22 @@ def validate_static_html(path: Path) -> ValidationResult:
 
     # Count symbols with both 1d and 4h keys in CHART_DATA
     dual_tf_symbol_count = 0
+    missing_dual_tf_symbols = []
     for sym, val in chart_data.items():
         if isinstance(val, dict) and "1d" in val and "4h" in val:
             dual_tf_symbol_count += 1
+        else:
+            missing_dual_tf_symbols.append(sym)
+
+    if crypto_slide_count > 0 and missing_dual_tf_symbols:
+        errors.append(
+            f"{len(missing_dual_tf_symbols)} symbol(s) are missing 1d and 4h chart data"
+        )
 
     # If dual-TF data exists, toggle buttons must be present
     if dual_tf_symbol_count > 0 and tf_toggle_count == 0:
         errors.append(
-            f"{dual_tf_symbol_count} symbol(s) have dual TF data but no .tf-toggle found in HTML"
+            f"{dual_tf_symbol_count} symbol(s) have dual TF data but no timeframe toggle (.tf-toggle) found in HTML"
         )
 
     ok = len(errors) == 0

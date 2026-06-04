@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Callable, Iterable
 
 import pandas as pd
 import requests
@@ -54,16 +54,131 @@ def _provider_candidates(market: MarketSymbol) -> list[str]:
     return [item for i, item in enumerate(candidates) if item and item not in candidates[:i]]
 
 
+def _timestamp_ms(row: object, timestamp_key: str | int) -> int | None:
+    try:
+        if isinstance(timestamp_key, int):
+            value = row[timestamp_key]  # type: ignore[index]
+        elif isinstance(row, dict):
+            value = row.get(timestamp_key)
+        else:
+            value = row[timestamp_key]  # type: ignore[index]
+        if value is None or value == "":
+            return None
+        return int(float(value))
+    except (TypeError, ValueError, KeyError, IndexError):
+        return None
+
+
+def _collect_paginated_rows(
+    fetch_page: Callable[[dict[str, object]], list],
+    *,
+    limit: int,
+    page_size: int,
+    timestamp_key: str | int,
+    end_param: str,
+) -> list:
+    """Collect newest `limit` rows by walking exchange APIs backwards."""
+    if limit <= 0:
+        return []
+    rows: list = []
+    seen: set[tuple[int, str]] = set()
+    end_value: int | None = None
+
+    while len(rows) < limit:
+        request_limit = min(page_size, limit - len(rows))
+        params: dict[str, object] = {"limit": request_limit}
+        if end_value is not None:
+            params[end_param] = end_value
+
+        page = list(fetch_page(params) or [])
+        if not page:
+            break
+
+        page_timestamps: list[int] = []
+        added = 0
+        for row in page:
+            ts = _timestamp_ms(row, timestamp_key)
+            if ts is None:
+                continue
+            page_timestamps.append(ts)
+            identity = (ts, repr(row))
+            if identity in seen:
+                continue
+            seen.add(identity)
+            rows.append(row)
+            added += 1
+
+        if not page_timestamps:
+            break
+        next_end = min(page_timestamps) - 1
+        if end_value is not None and next_end >= end_value:
+            break
+        end_value = next_end
+        if len(page) < request_limit or added == 0:
+            break
+
+    rows.sort(key=lambda row: _timestamp_ms(row, timestamp_key) or 0)
+    return rows[-limit:]
+
+
+def _get_paginated_rows(
+    url: str,
+    base_params: dict[str, object],
+    *,
+    limit: int,
+    page_size: int,
+    rows_from_payload: Callable[[object], list],
+    timestamp_key: str | int,
+    end_param: str = "endTime",
+) -> list:
+    def fetch_page(page_params: dict[str, object]) -> list:
+        payload = _get_json(url, {**base_params, **page_params})
+        return rows_from_payload(payload)
+
+    return _collect_paginated_rows(
+        fetch_page,
+        limit=limit,
+        page_size=page_size,
+        timestamp_key=timestamp_key,
+        end_param=end_param,
+    )
+
+
+def _payload_as_list(payload: object) -> list:
+    return payload if isinstance(payload, list) else []
+
+
+def _result_list(payload: object) -> list:
+    if not isinstance(payload, dict):
+        return []
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return []
+    rows = result.get("list")
+    return rows if isinstance(rows, list) else []
+
+
+def _funding_limit_for_timeframe(timeframe: str, candle_limit: int) -> int:
+    candles_per_day = {"1h": 24, "4h": 6, "1d": 1}.get(timeframe, 1)
+    days = max(1, (candle_limit + candles_per_day - 1) // candles_per_day)
+    return max(200, days * 3 + 10)
+
+
 def _fetch_bybit(market: MarketSymbol, timeframe: str, limit: int) -> pd.DataFrame:
     interval = {"1h": "60", "4h": "240", "1d": "D"}[timeframe]
     oi_interval = {"1h": "1h", "4h": "4h", "1d": "1d"}[timeframe]
     symbol = _usdt_symbol(market)
     base = "https://api.bybit.com"
 
-    candles = _get_json(
+    candles = _get_paginated_rows(
         f"{base}/v5/market/kline",
         {"category": "linear", "symbol": symbol, "interval": interval, "limit": limit},
-    )["result"]["list"]
+        limit=limit,
+        page_size=1000,
+        rows_from_payload=_result_list,
+        timestamp_key=0,
+        end_param="end",
+    )
     ohlcv = pd.DataFrame(
         candles,
         columns=["timestamp", "open", "high", "low", "close", "volume", "turnover"],
@@ -72,10 +187,14 @@ def _fetch_bybit(market: MarketSymbol, timeframe: str, limit: int) -> pd.DataFra
     ohlcv["timestamp"] = pd.to_datetime(ohlcv["timestamp"].astype("int64"), unit="ms", utc=True)
     ohlcv = ohlcv.sort_values("timestamp")
 
-    oi_raw = _get_json(
+    oi_raw = _get_paginated_rows(
         f"{base}/v5/market/open-interest",
         {"category": "linear", "symbol": symbol, "intervalTime": oi_interval, "limit": min(limit, 200)},
-    )["result"]["list"]
+        limit=limit,
+        page_size=200,
+        rows_from_payload=_result_list,
+        timestamp_key="timestamp",
+    )
     oi = pd.DataFrame(oi_raw)
     if oi.empty or "timestamp" not in oi.columns or "openInterest" not in oi.columns:
         # API returned empty or unexpected shape — build a neutral OI frame from kline timestamps
@@ -85,10 +204,14 @@ def _fetch_bybit(market: MarketSymbol, timeframe: str, limit: int) -> pd.DataFra
         oi["open_interest"] = pd.to_numeric(oi["openInterest"], errors="coerce")
         oi = oi[["timestamp", "open_interest"]].sort_values("timestamp")
 
-    funding_raw = _get_json(
+    funding_raw = _get_paginated_rows(
         f"{base}/v5/market/funding/history",
         {"category": "linear", "symbol": symbol, "limit": 200},
-    )["result"]["list"]
+        limit=_funding_limit_for_timeframe(timeframe, limit),
+        page_size=200,
+        rows_from_payload=_result_list,
+        timestamp_key="fundingRateTimestamp",
+    )
     funding = pd.DataFrame(funding_raw)
     if funding.empty or "fundingRateTimestamp" not in funding.columns:
         funding = pd.DataFrame({"timestamp": ohlcv["timestamp"], "funding_rate": pd.NA})
@@ -111,7 +234,14 @@ def _fetch_binance_usdt_m(market: MarketSymbol, timeframe: str, limit: int) -> p
     symbol = _usdt_symbol(market)
     base = "https://fapi.binance.com"
 
-    candles = _get_json(f"{base}/fapi/v1/klines", {"symbol": symbol, "interval": interval, "limit": limit})
+    candles = _get_paginated_rows(
+        f"{base}/fapi/v1/klines",
+        {"symbol": symbol, "interval": interval, "limit": limit},
+        limit=limit,
+        page_size=1500,
+        rows_from_payload=_payload_as_list,
+        timestamp_key=0,
+    )
     ohlcv = pd.DataFrame(
         candles,
         columns=[
@@ -132,9 +262,13 @@ def _fetch_binance_usdt_m(market: MarketSymbol, timeframe: str, limit: int) -> p
     ohlcv = _numeric_frame(ohlcv, ["open", "high", "low", "close", "volume"])
     ohlcv["timestamp"] = pd.to_datetime(ohlcv["timestamp"].astype("int64"), unit="ms", utc=True)
 
-    oi_raw = _get_json(
+    oi_raw = _get_paginated_rows(
         "https://fapi.binance.com/futures/data/openInterestHist",
         {"symbol": symbol, "period": interval, "limit": min(limit, 500)},
+        limit=limit,
+        page_size=500,
+        rows_from_payload=_payload_as_list,
+        timestamp_key="timestamp",
     )
     oi = pd.DataFrame(oi_raw)
     if oi.empty or "timestamp" not in oi.columns or "sumOpenInterest" not in oi.columns:
@@ -144,7 +278,14 @@ def _fetch_binance_usdt_m(market: MarketSymbol, timeframe: str, limit: int) -> p
         oi["open_interest"] = pd.to_numeric(oi["sumOpenInterest"], errors="coerce")
         oi = oi[["timestamp", "open_interest"]]
 
-    funding_raw = _get_json(f"{base}/fapi/v1/fundingRate", {"symbol": symbol, "limit": 200})
+    funding_raw = _get_paginated_rows(
+        f"{base}/fapi/v1/fundingRate",
+        {"symbol": symbol, "limit": 1000},
+        limit=_funding_limit_for_timeframe(timeframe, limit),
+        page_size=1000,
+        rows_from_payload=_payload_as_list,
+        timestamp_key="fundingTime",
+    )
     funding = pd.DataFrame(funding_raw)
     if funding.empty or "fundingTime" not in funding.columns:
         funding = pd.DataFrame({"timestamp": ohlcv["timestamp"], "funding_rate": pd.NA})
@@ -157,9 +298,13 @@ def _fetch_binance_usdt_m(market: MarketSymbol, timeframe: str, limit: int) -> p
 
 
 def _fetch_binance_coin_m_daily_oi_ohlc(pair: str, limit: int) -> pd.DataFrame:
-    raw = _get_json(
+    raw = _get_paginated_rows(
         "https://dapi.binance.com/futures/data/openInterestHist",
         {"pair": pair, "contractType": "PERPETUAL", "period": "4h", "limit": min(limit * 6, 500)},
+        limit=limit * 6,
+        page_size=500,
+        rows_from_payload=_payload_as_list,
+        timestamp_key="timestamp",
     )
     oi = pd.DataFrame(raw)
     if oi.empty:
@@ -183,7 +328,14 @@ def _fetch_binance_coin_m(market: MarketSymbol, timeframe: str, limit: int) -> p
     pair = f"{market.base}USD"
     base = "https://dapi.binance.com"
 
-    candles = _get_json(f"{base}/dapi/v1/klines", {"symbol": symbol, "interval": interval, "limit": limit})
+    candles = _get_paginated_rows(
+        f"{base}/dapi/v1/klines",
+        {"symbol": symbol, "interval": interval, "limit": limit},
+        limit=limit,
+        page_size=1500,
+        rows_from_payload=_payload_as_list,
+        timestamp_key=0,
+    )
     ohlcv = pd.DataFrame(
         candles,
         columns=[
@@ -204,9 +356,13 @@ def _fetch_binance_coin_m(market: MarketSymbol, timeframe: str, limit: int) -> p
     ohlcv = _numeric_frame(ohlcv, ["open", "high", "low", "close", "volume"])
     ohlcv["timestamp"] = pd.to_datetime(ohlcv["timestamp"].astype("int64"), unit="ms", utc=True)
 
-    oi_raw = _get_json(
+    oi_raw = _get_paginated_rows(
         f"{base}/futures/data/openInterestHist",
         {"pair": pair, "contractType": "PERPETUAL", "period": interval, "limit": min(limit, 500)},
+        limit=limit,
+        page_size=500,
+        rows_from_payload=_payload_as_list,
+        timestamp_key="timestamp",
     )
     oi = pd.DataFrame(oi_raw)
     if oi.empty or "timestamp" not in oi.columns or "sumOpenInterest" not in oi.columns:
@@ -216,7 +372,14 @@ def _fetch_binance_coin_m(market: MarketSymbol, timeframe: str, limit: int) -> p
         oi["open_interest"] = pd.to_numeric(oi["sumOpenInterest"], errors="coerce")
         oi = oi[["timestamp", "open_interest"]]
 
-    funding_raw = _get_json(f"{base}/dapi/v1/fundingRate", {"symbol": symbol, "limit": 200})
+    funding_raw = _get_paginated_rows(
+        f"{base}/dapi/v1/fundingRate",
+        {"symbol": symbol, "limit": 1000},
+        limit=_funding_limit_for_timeframe(timeframe, limit),
+        page_size=1000,
+        rows_from_payload=_payload_as_list,
+        timestamp_key="fundingTime",
+    )
     funding = pd.DataFrame(funding_raw)
     if funding.empty or "fundingTime" not in funding.columns:
         funding = pd.DataFrame({"timestamp": ohlcv["timestamp"], "funding_rate": pd.NA})

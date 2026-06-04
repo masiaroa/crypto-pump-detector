@@ -11,11 +11,25 @@ from .storage import append_snapshots
 from .symbols import normalize_symbol
 
 
+EIGHTEEN_MONTH_DAILY_CANDLES = 548
+_CANDLES_PER_DAY = {"1d": 1, "4h": 6}
+_LEGACY_DEFAULT_LIMIT = 260
+
+
+def _limit_for_timeframe(timeframe: str, explicit_limit: int | None = None) -> int:
+    if explicit_limit is not None:
+        return explicit_limit
+    per_day = _CANDLES_PER_DAY.get(timeframe)
+    if per_day:
+        return EIGHTEEN_MONTH_DAILY_CANDLES * per_day
+    return _LEGACY_DEFAULT_LIMIT
+
+
 def scan_watchlist(
     symbols: list[str] | None = None,
     settings: Settings | None = None,
     persist: bool = False,
-    limit: int = 260,
+    limit: int | None = None,
 ) -> tuple[pd.DataFrame, dict[tuple[str, str], pd.DataFrame]]:
     settings = settings or load_settings()
     symbols = symbols or load_watchlist()
@@ -35,7 +49,7 @@ def scan_watchlist(
             continue
         for timeframe in settings.timeframes:
             try:
-                data = fetch_market_data(raw_symbol, timeframe, limit=limit)
+                data = fetch_market_data(raw_symbol, timeframe, limit=_limit_for_timeframe(timeframe, limit))
                 indicators = compute_indicators(data.candles, lookback_stats=int(settings.thresholds["lookback_stats"]))
                 marked = mark_signal_history(
                     indicators,
