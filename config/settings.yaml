@@ -41,6 +41,25 @@ liquidations:
     # Sin key se omite silenciosamente. 40 req/min.
     enabled: true
 
+squeeze:
+  enabled: true
+  lookback_divergence: 20      # velas para medir divergencia OI-precio
+  oi_build_min_pct: 0.05       # OI debe subir >=5% en el lookback
+  price_flat_max_pct: 0.02     # ...con el precio subiendo <=2% (plano o cayendo)
+  funding_low_percentile: 20   # funding <=0 y en el percentil bajo = shorts pagando
+  ls_long_max: 0.45            # long ratio por debajo de esto = cortos masificados
+  stop_cluster_max_distance_pct: 0.10  # solo clusters de stops a <=10% del precio
+  compression_percentile: 15   # ancho de Bollinger en percentil <=15 = muelle comprimido
+  setup_score_min: 55          # score minimo para marcar squeeze_setup_flag
+  setup_min_oi_points: 15      # ...y el componente OI debe aportar al menos esto
+  # Pesos por componente; pon a 0 los que no te convenzan (funding/ls).
+  weight_oi_build: 35
+  weight_stop_magnet: 15
+  weight_compression: 10
+  weight_basis: 15
+  weight_funding: 15
+  weight_ls: 10
+
 coinalyze_dashboard:
   enabled: true
   timeframes:

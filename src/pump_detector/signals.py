@@ -46,6 +46,15 @@ class SignalSnapshot:
     forward_return_5_candles: float | None = None
     max_favorable_excursion: float | None = None
     max_adverse_excursion: float | None = None
+    squeeze_setup_score: float = 0.0
+    squeeze_oi_points: float = 0.0
+    squeeze_setup_flag: bool = False
+    oi_added_on_down_share: float = 0.0
+    oi_price_divergence_flag: bool = False
+    bbw_percentile: float = 0.0
+    coiled_spring_flag: bool = False
+    stop_cluster_distance_pct: float = 0.0
+    stop_cluster_strength: float = 0.0
 
     def to_dict(self) -> dict[str, object]:
         data = asdict(self)
@@ -267,11 +276,15 @@ def evaluate_latest(
     oi_surge_flag = bool(oi_3bar_change_pct >= oi_surge_3bar_pct)
     volume_surge_flag = bool(volume_3bar_ratio >= volume_surge_3bar_ratio)
     last_signal_time = latest["timestamp"].isoformat() if signal_active else ""
+    squeeze_setup_score = _float(latest.get("squeeze_setup_score"))
+    squeeze_setup_flag = bool(latest.get("squeeze_setup_flag", False))
     reasons = _notes(price_impulse, oi_impulse, first_impulse, funding_class, latest, notes)
     if oi_surge_flag:
         reasons += f"; OI surge 3-bar {oi_3bar_change_pct*100:.1f}%"
     if volume_surge_flag:
         reasons += f"; volume surge 3-bar {volume_3bar_ratio:.1f}x"
+    if squeeze_setup_flag:
+        reasons += f"; squeeze setup {squeeze_setup_score:.0f}"
 
     return SignalSnapshot(
         symbol=symbol,
@@ -307,6 +320,15 @@ def evaluate_latest(
         alert_triggered=alert_triggered,
         last_signal_time=last_signal_time,
         notes=reasons,
+        squeeze_setup_score=squeeze_setup_score,
+        squeeze_oi_points=_float(latest.get("squeeze_oi_points")),
+        squeeze_setup_flag=squeeze_setup_flag,
+        oi_added_on_down_share=_float(latest.get("oi_added_on_down_share")),
+        oi_price_divergence_flag=bool(latest.get("oi_price_divergence_flag", False)),
+        bbw_percentile=_float(latest.get("bbw_percentile")),
+        coiled_spring_flag=bool(latest.get("coiled_spring_flag", False)),
+        stop_cluster_distance_pct=_float(latest.get("stop_cluster_distance_pct")),
+        stop_cluster_strength=_float(latest.get("stop_cluster_strength")),
     )
 
 

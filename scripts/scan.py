@@ -9,6 +9,7 @@ from pump_detector.config import ROOT, load_settings, load_watchlist
 from pump_detector.liquidations import fetch_liquidation_map
 from pump_detector.positioning import fetch_long_short_history, fetch_long_short_ratio
 from pump_detector.scanner import scan_watchlist
+from pump_detector.squeeze import latest_score_with_ls, ls_history_falling
 
 
 def _sanitize_key(symbol: str, timeframe: str) -> str:
@@ -41,6 +42,39 @@ def _enrich_with_long_short_ratio(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _enrich_with_squeeze(df: pd.DataFrame, ls_map: dict, settings) -> pd.DataFrame:
+    """Fold the long/short crowding component into the latest squeeze score.
+
+    The per-candle score from the scanner only covers candle-native
+    components (OI build, stop clusters, compression, funding); the L/S
+    ratio is fetched separately per symbol so it gets folded in here,
+    before latest_scan.csv is written.
+    """
+    if df.empty or "squeeze_setup_score" not in df.columns:
+        return df
+    cfg = dict(settings.squeeze or {})
+    if not cfg.get("enabled", True):
+        return df
+    df = df.copy()
+    scores: list[float] = []
+    flags: list[bool] = []
+    for _, row in df.iterrows():
+        points = (ls_map or {}).get((str(row.get("symbol")), str(row.get("timeframe"))), [])
+        score, flag = latest_score_with_ls(
+            float(row.get("squeeze_setup_score") or 0.0),
+            float(row.get("squeeze_oi_points") or 0.0),
+            float(row.get("long_account_ratio") or 0.0),
+            ls_history_falling(points),
+            settings=cfg,
+            funding_available=str(row.get("funding_classification", "UNKNOWN")) != "UNKNOWN",
+        )
+        scores.append(score)
+        flags.append(flag)
+    df["squeeze_setup_score"] = scores
+    df["squeeze_setup_flag"] = flags
+    return df
+
+
 def _fetch_ls_history_map(details: dict) -> dict[tuple, list[dict]]:
     """Return {(symbol, timeframe): [{timestamp_ms, long_pct, short_pct}, ...]}."""
     cache: dict[tuple[str, str], list[dict]] = {}
@@ -61,6 +95,7 @@ def _export_charts(details: dict, charts_dir: Path, ls_map: dict | None = None) 
         "close", "open", "high", "low",
         "open_interest", "oi_open", "oi_high", "oi_low", "oi_close",
         "volume", "funding_rate",
+        "squeeze_setup_score", "stop_cluster_level",
     ]
     for (raw_symbol, timeframe), df in details.items():
         available = [c for c in cols if c in df.columns]
@@ -133,7 +168,8 @@ def _export_event_history(details: dict, history_path: Path) -> None:
         pre_col = "pre_alert_flag"
         oi_surge_col = "oi_surge_flag"
         vol_surge_col = "volume_surge_flag"
-        relevant_cols = [sig_col, pre_col, oi_surge_col, vol_surge_col]
+        squeeze_col = "squeeze_setup_flag"
+        relevant_cols = [sig_col, pre_col, oi_surge_col, vol_surge_col, squeeze_col]
         if not any(c in hist.columns for c in relevant_cols):
             continue
         mask = pd.Series(False, index=hist.index)
@@ -151,8 +187,11 @@ def _export_event_history(details: dict, history_path: Path) -> None:
             is_hot = bool(row.get("hot_pre_entry_flag", False))
             is_oi_surge = bool(row.get(oi_surge_col, False))
             is_vol_surge = bool(row.get(vol_surge_col, False))
+            is_squeeze = bool(row.get(squeeze_col, False))
             if is_signal:
                 et = "ENTRY"
+            elif is_squeeze:
+                et = "SQUEEZE_SETUP"
             elif is_oi_surge:
                 et = "OI_SURGE"
             elif is_vol_surge:
@@ -175,6 +214,7 @@ def _export_event_history(details: dict, history_path: Path) -> None:
                 "funding_classification": row.get("funding_classification", "UNKNOWN"),
                 "early_bullish_score": row.get("early_bullish_score", 0.0),
                 "blowoff_risk_score": row.get("blowoff_risk_score", 0.0),
+                "squeeze_setup_score": row.get("squeeze_setup_score", 0.0),
             })
     if not rows:
         return
@@ -200,6 +240,17 @@ if __name__ == "__main__":
     log(f"[scan] fetching current L/S ratio for {unique_syms} symbols…")
     df = _enrich_with_long_short_ratio(df)
 
+    # L/S history is fetched before the CSV is written: the squeeze score
+    # needs the ratio slope, and the chart export reuses the same map.
+    log(f"[scan] fetching L/S history for {len(details)} (symbol, tf) pairs…")
+    ls_map = _fetch_ls_history_map(details)
+    ls_ok = sum(1 for v in ls_map.values() if v)
+    log(f"[scan] L/S history: {ls_ok}/{len(ls_map)} pairs with data")
+
+    df = _enrich_with_squeeze(df, ls_map, settings)
+    squeeze_count = int(df["squeeze_setup_flag"].sum()) if "squeeze_setup_flag" in df.columns else 0
+    log(f"[scan] squeeze setups: {squeeze_count}")
+
     # Latest scan CSV
     latest_csv = ROOT / "data" / "latest_scan.csv"
     latest_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -207,10 +258,6 @@ if __name__ == "__main__":
     log(f"[scan] latest_scan.csv written ({len(df)} rows)")
 
     # Chart data for the HTML dashboard (with L/S history overlay)
-    log(f"[scan] fetching L/S history for {len(details)} (symbol, tf) pairs…")
-    ls_map = _fetch_ls_history_map(details)
-    ls_ok = sum(1 for v in ls_map.values() if v)
-    log(f"[scan] L/S history: {ls_ok}/{len(ls_map)} pairs with data")
     _export_charts(details, ROOT / "data" / "charts", ls_map=ls_map)
     log(f"[scan] chart JSONs written")
 

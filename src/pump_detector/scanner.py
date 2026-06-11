@@ -7,6 +7,7 @@ import pandas as pd
 from .config import ROOT, Settings, load_settings, load_watchlist
 from .data_clients import DataUnavailable, fetch_market_data
 from .signals import SignalSnapshot, compute_indicators, evaluate_latest, mark_signal_history
+from .squeeze import compute_squeeze_columns
 from .storage import append_snapshots
 from .symbols import normalize_symbol
 
@@ -60,6 +61,8 @@ def scan_watchlist(
                     oi_surge_3bar_pct=float(settings.thresholds.get("oi_surge_3bar_pct", 0.04)),
                     volume_surge_3bar_ratio=float(settings.thresholds.get("volume_surge_3bar_ratio", 2.5)),
                 )
+                if bool((settings.squeeze or {}).get("enabled", True)):
+                    marked = compute_squeeze_columns(marked, settings=settings.squeeze)
                 snapshot = evaluate_latest(
                     marked,
                     timeframe=timeframe,

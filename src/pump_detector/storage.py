@@ -56,7 +56,14 @@ def append_snapshots(snapshots: list[SignalSnapshot], sqlite_path: Path, alerts_
     alerts = df[df["alert_triggered"] == True]  # noqa: E712 - pandas boolean filter
     if not alerts.empty:
         alerts_csv.parent.mkdir(parents=True, exist_ok=True)
-        alerts.to_csv(alerts_csv, mode="a", header=not alerts_csv.exists(), index=False)
+        if alerts_csv.exists():
+            # Appending must match the file's existing header — new snapshot
+            # columns would otherwise shift values into the wrong columns.
+            existing_cols = pd.read_csv(alerts_csv, nrows=0).columns.tolist()
+            alerts = alerts.reindex(columns=existing_cols)
+            alerts.to_csv(alerts_csv, mode="a", header=False, index=False)
+        else:
+            alerts.to_csv(alerts_csv, index=False)
 
 
 def read_recent_alerts(alerts_csv: Path) -> pd.DataFrame:

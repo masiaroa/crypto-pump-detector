@@ -29,6 +29,7 @@ class Settings:
     storage: dict[str, Any]
     liquidations: dict[str, Any] = field(default_factory=dict)
     coinalyze_dashboard: dict[str, Any] = field(default_factory=dict)
+    squeeze: dict[str, Any] = field(default_factory=dict)
 
 
 DEFAULT_SETTINGS = {
@@ -75,6 +76,25 @@ DEFAULT_SETTINGS = {
         "max_age_hours": 6,
         "core_exchanges": ["BINANCE", "BYBIT", "OKX"],
     },
+    "squeeze": {
+        "enabled": True,
+        "lookback_divergence": 20,
+        "oi_build_min_pct": 0.05,
+        "price_flat_max_pct": 0.02,
+        "funding_low_percentile": 20,
+        "ls_long_max": 0.45,
+        "stop_cluster_max_distance_pct": 0.10,
+        "compression_percentile": 15,
+        "setup_score_min": 55,
+        "setup_min_oi_points": 15,
+        # Component weights; zero out the ones you don't trust.
+        "weight_oi_build": 35,
+        "weight_stop_magnet": 15,
+        "weight_compression": 10,
+        "weight_basis": 15,
+        "weight_funding": 15,
+        "weight_ls": 10,
+    },
 }
 
 
@@ -93,7 +113,7 @@ def load_settings(path: Path | None = None) -> Settings:
     ensure_default_files()
     raw = read_yaml(path or CONFIG_DIR / "settings.yaml")
     merged = DEFAULT_SETTINGS | (raw or {})
-    for key in ("alert_conditions", "thresholds", "storage", "liquidations", "coinalyze_dashboard"):
+    for key in ("alert_conditions", "thresholds", "storage", "liquidations", "coinalyze_dashboard", "squeeze"):
         merged[key] = dict(DEFAULT_SETTINGS.get(key, {})) | dict((raw or {}).get(key, {}) or {})
 
     # Allow env-var override: SCAN_TIMEFRAME=1d or SCAN_TIMEFRAME=4h,1d
@@ -115,6 +135,7 @@ def load_settings(path: Path | None = None) -> Settings:
         storage=dict(merged["storage"]),
         liquidations=dict(merged["liquidations"]),
         coinalyze_dashboard=dict(merged["coinalyze_dashboard"]),
+        squeeze=dict(merged["squeeze"]),
     )
 
 

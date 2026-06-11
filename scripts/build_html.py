@@ -337,6 +337,8 @@ def row_from_event(event: dict) -> dict:
         "oi_change_pct": event.get("oi_change_pct", 0),
         "signal_active": event.get("event_type") == "ENTRY",
         "alert_triggered": event.get("event_type") in {"ENTRY", "HOT_PRE_ENTRY"},
+        "squeeze_setup_score": event.get("squeeze_setup_score", 0),
+        "squeeze_setup_flag": event.get("event_type") == "SQUEEZE_SETUP",
     }
 
 
@@ -445,7 +447,8 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
         has_signal = bool(row.get("signal_active") or row.get("alert_triggered"))
         oi_surge = bool(row.get("oi_surge_flag"))
         vol_surge = bool(row.get("volume_surge_flag"))
-        priority = (3 if has_signal else 2 if oi_surge else 1 if vol_surge else 0)
+        squeeze_flag = bool(row.get("squeeze_setup_flag"))
+        priority = (4 if has_signal else 3 if squeeze_flag else 2 if oi_surge else 1 if vol_surge else 0)
         ev = latest_event.get(sym, {})
         overview_rows.append({
             "symbol": sym,
@@ -454,6 +457,8 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
             "has_signal": has_signal,
             "oi_surge": oi_surge,
             "vol_surge": vol_surge,
+            "squeeze_flag": squeeze_flag,
+            "squeeze": safe_float(row.get("squeeze_setup_score", 0)),
             "bull": safe_float(row.get("early_bullish_score", 0)),
             "risk": safe_float(row.get("blowoff_risk_score", 0)),
             "close": safe_float(row.get("close", 0)),
@@ -469,13 +474,16 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
     overview_rows.sort(key=lambda r: (-r["priority"], -r["bull"], r["symbol"]))
 
     signal_count = sum(1 for r in overview_rows if r["has_signal"])
-    surge_count = sum(1 for r in overview_rows if (r["oi_surge"] or r["vol_surge"]) and not r["has_signal"])
+    squeeze_count = sum(1 for r in overview_rows if r["squeeze_flag"] and not r["has_signal"])
+    surge_count = sum(1 for r in overview_rows if (r["oi_surge"] or r["vol_surge"]) and not r["has_signal"] and not r["squeeze_flag"])
 
     overview_rows_html = ""
     for r in overview_rows:
         label = esc(_short_base(r["symbol"]))
         if r["has_signal"]:
             icon = "🟢"
+        elif r["squeeze_flag"]:
+            icon = "🟣"
         elif r["oi_surge"] or r["vol_surge"]:
             icon = "🟡"
         else:
@@ -483,6 +491,8 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
         sig_chips = ""
         if r["has_signal"]:
             sig_chips += '<span class="sig-chip sig-entry">ENTRY</span>'
+        if r["squeeze_flag"]:
+            sig_chips += f'<span class="sig-chip sig-squeeze" title="Squeeze setup score {r["squeeze"]:.0f} — shorts atrapados">SQUEEZE</span>'
         if r["oi_surge"]:
             sig_chips += f'<span class="sig-chip sig-oi" title="3-bar OI +{r["oi_3bar"]*100:.1f}%">OI&nbsp;SURGE</span>'
         if r["vol_surge"]:
@@ -502,6 +512,7 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
                 "HOT_PRE_ENTRY": "et-hot",
                 "OI_SURGE": "et-oi",
                 "VOLUME_SURGE": "et-vol",
+                "SQUEEZE_SETUP": "et-squeeze",
             }.get(et, "et-pre")
             last_event_cell = (
                 f'<span class="event-type-badge {et_cls}">{esc(et)}</span>'
@@ -516,6 +527,7 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
             <td style="color:{change_color}">{esc(format_pct(r["change"]))}</td>
             <td style="color:{score_color(r["bull"])}">{r["bull"]:.0f}</td>
             <td style="color:#f85149">{r["risk"]:.0f}</td>
+            <td style="color:{score_color(r["squeeze"])}">{r["squeeze"]:.0f}</td>
             <td style="color:{oi3_color}">{r["oi_3bar"]*100:+.1f}%</td>
             <td>{r["vol_3bar"]:.1f}x</td>
             <td><span class="badge {funding_badge_class(r["funding"])}">{esc(r["funding"])}</span></td>
@@ -528,10 +540,10 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
     if overview_rows_html:
         overview_table_html = f"""
         <div class="events-table-wrap">
-          <h3 class="section-label">Watchlist — click symbol to navigate · {signal_count} signal(s) · {surge_count} surge(s) · {len(latest_event)} symbols with recent events</h3>
+          <h3 class="section-label">Watchlist — click symbol to navigate · {signal_count} signal(s) · {squeeze_count} squeeze(s) · {surge_count} surge(s) · {len(latest_event)} symbols with recent events</h3>
           <table class="overview-table">
             <thead>
-              <tr><th>Symbol</th><th>Price</th><th>Chg</th><th>Bull</th><th>Risk</th><th>OI&nbsp;3b</th><th>Vol&nbsp;3b</th><th>Funding</th><th>L/S</th><th>Signals</th><th>Last&nbsp;event</th></tr>
+              <tr><th>Symbol</th><th>Price</th><th>Chg</th><th>Bull</th><th>Risk</th><th title="Squeeze setup score — shorts atrapados">Sqz</th><th>OI&nbsp;3b</th><th>Vol&nbsp;3b</th><th>Funding</th><th>L/S</th><th>Signals</th><th>Last&nbsp;event</th></tr>
             </thead>
             <tbody>{overview_rows_html}</tbody>
           </table>
@@ -813,6 +825,7 @@ html, body {
 .et-hot   { background: #2d1b00; color: #d29922; }
 .et-oi    { background: #1a2f4b; color: #79c0ff; }
 .et-vol   { background: #2a1a4b; color: #d2a8ff; }
+.et-squeeze { background: #3b1d2e; color: #f778ba; }
 .et-pre   { background: #1a1f29; color: #79c0ff; }
 
 /* ── Overview table ── */
@@ -825,6 +838,7 @@ html, body {
 .sig-entry { background: #0d2a1a; color: #3fb950; }
 .sig-oi    { background: #1a2f4b; color: #79c0ff; }
 .sig-vol   { background: #2a1a4b; color: #d2a8ff; }
+.sig-squeeze { background: #3b1d2e; color: #f778ba; }
 .last-event-cell { white-space: nowrap; }
 .event-date { color: #6e7681; font-size: 10px; }
 .muted { color: #6e7681; }
