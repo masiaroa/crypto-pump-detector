@@ -6,6 +6,9 @@ from pump_detector.squeeze import (
     compute_squeeze_columns,
     latest_score_with_ls,
     ls_history_falling,
+    short_liq_zscore,
+    squeeze_ignition,
+    taker_ratio_zscore,
 )
 
 
@@ -119,6 +122,43 @@ def test_ls_history_falling():
     assert ls_history_falling(falling) is True
     assert ls_history_falling(rising) is False
     assert ls_history_falling([]) is False
+
+
+def test_squeeze_ignition_fires_on_short_liq_spike_after_setup():
+    history = pd.Series([10.0] * 20 + [50.0, 58.0, 47.0, 20.0, 12.0, 8.0])
+    latest = pd.Series(
+        {"price_return_pct": 0.035, "close_near_high": True, "price_return_zscore": 2.0, "oi_change_pct": 0.01}
+    )
+    assert squeeze_ignition(history, latest, short_liq_z=3.0, taker_z=0.0) is True
+    # No confirming trigger → no ignition
+    assert squeeze_ignition(history, latest, short_liq_z=0.5, taker_z=0.5) is False
+    # Short covering (price up, OI down) is a valid trigger on its own
+    covering = latest.copy()
+    covering["oi_change_pct"] = -0.03
+    assert squeeze_ignition(history, covering, short_liq_z=0.0, taker_z=0.0) is True
+    # Without a prior setup nothing fires
+    flat = pd.Series([10.0] * 26)
+    assert squeeze_ignition(flat, latest, short_liq_z=3.0, taker_z=3.0) is False
+
+
+def test_short_liq_zscore_detects_spike_on_latest_candle():
+    ts = pd.Series(pd.date_range("2026-01-01", periods=60, freq="4h", tz="UTC"))
+    rows = [
+        {"timestamp": ts.iloc[i], "side": "short", "notional": 10_000.0 + (i % 7) * 1_000}
+        for i in range(59)
+    ]
+    rows.append({"timestamp": ts.iloc[59], "side": "short", "notional": 500_000.0})
+    frame = pd.DataFrame(rows)
+    assert short_liq_zscore(frame, ts) >= 2.0
+    assert short_liq_zscore(pd.DataFrame(), ts) == 0.0
+    assert short_liq_zscore(None, ts) == 0.0
+
+
+def test_taker_ratio_zscore():
+    quiet = [{"timestamp_ms": i, "buy_ratio": 0.50 + (i % 5) * 0.01} for i in range(40)]
+    spike = quiet + [{"timestamp_ms": 41, "buy_ratio": 0.72}]
+    assert taker_ratio_zscore(spike) >= 2.0
+    assert taker_ratio_zscore(quiet[:5]) == 0.0
 
 
 def test_blank_columns_when_no_open_interest():

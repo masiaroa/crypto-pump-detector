@@ -13,15 +13,22 @@ from pump_detector.accumulation import (
 )
 from pump_detector.config import ROOT, load_settings, load_watchlist
 from pump_detector.data_clients import fetch_spot_volumes
-from pump_detector.liquidations import fetch_liquidation_map
+from pump_detector.liquidations import fetch_coinalyze_liquidations_batch, fetch_liquidation_map
 from pump_detector.positioning import (
     fetch_global_long_short_history,
     fetch_long_short_history,
     fetch_long_short_ratio,
+    fetch_taker_ratio_history,
     fetch_top_position_ratio_history,
 )
 from pump_detector.scanner import scan_watchlist
-from pump_detector.squeeze import latest_score_with_ls, ls_history_falling
+from pump_detector.squeeze import (
+    latest_score_with_ls,
+    ls_history_falling,
+    short_liq_zscore,
+    squeeze_ignition,
+    taker_ratio_zscore,
+)
 
 
 def _sanitize_key(symbol: str, timeframe: str) -> str:
@@ -246,13 +253,71 @@ def _export_liquidations(liquidations: dict, liquidations_dir: Path) -> None:
 
 
 def _fetch_liquidations_for_details(details: dict, settings) -> dict:
-    rows = {}
+    """Coinalyze liquidations per (symbol, timeframe), batched per timeframe.
+
+    Batching comma-joined symbols turns ~80 calls into ~4 on a 40-symbol
+    watchlist — the free tier allows 40 req/min. Falls back to per-symbol
+    fetches if the batch path returns nothing (e.g. older config shapes).
+    """
     liq_settings = dict(settings.liquidations or {})
+    if not liq_settings.get("enabled", True):
+        return {}
+    coinalyze_cfg = dict(liq_settings.get("coinalyze", {}) or {})
+    rows: dict[tuple, pd.DataFrame] = {}
+    timeframes: dict[str, list[str]] = {}
+    for raw_symbol, timeframe in details:
+        timeframes.setdefault(timeframe, []).append(raw_symbol)
+    for timeframe, symbols in timeframes.items():
+        batch = fetch_coinalyze_liquidations_batch(symbols, timeframe, coinalyze_cfg)
+        for raw_symbol, frame in batch.items():
+            rows[(raw_symbol, timeframe)] = frame
+    if rows:
+        return rows
     for raw_symbol, timeframe in details:
         frame = fetch_liquidation_map(raw_symbol, timeframe, settings=liq_settings)
         if not frame.empty:
             rows[(raw_symbol, timeframe)] = frame
     return rows
+
+
+def _enrich_with_squeeze_ignition(
+    df: pd.DataFrame,
+    details: dict,
+    liquidation_details: dict,
+    taker_map: dict,
+    settings,
+) -> pd.DataFrame:
+    """Evaluate the squeeze ignition for the newest candle of each pair.
+
+    Needs the per-candle setup-score history (details), the Coinalyze
+    liquidation frames and the taker buy-ratio history — that's why it runs
+    after those fetches and right before latest_scan.csv is written.
+    """
+    if df.empty or "squeeze_setup_score" not in df.columns:
+        return df
+    cfg = dict(settings.squeeze or {})
+    if not cfg.get("enabled", True):
+        return df
+    df = df.copy()
+    flags, liq_zs, taker_zs = [], [], []
+    for _, row in df.iterrows():
+        symbol = str(row.get("symbol"))
+        timeframe = str(row.get("timeframe"))
+        history = details.get((symbol, timeframe))
+        liq_z = 0.0
+        taker_z = taker_ratio_zscore((taker_map or {}).get(symbol, []))
+        flag = False
+        if history is not None and "squeeze_setup_score" in history.columns:
+            liq_frame = (liquidation_details or {}).get((symbol, timeframe))
+            liq_z = short_liq_zscore(liq_frame, history["timestamp"])
+            flag = squeeze_ignition(history["squeeze_setup_score"], row, liq_z, taker_z, settings=cfg)
+        flags.append(flag)
+        liq_zs.append(liq_z)
+        taker_zs.append(taker_z)
+    df["squeeze_ignition_flag"] = flags
+    df["short_liq_zscore"] = liq_zs
+    df["taker_buy_ratio_zscore"] = taker_zs
+    return df
 
 
 def _export_event_history(details: dict, history_path: Path) -> None:
@@ -362,6 +427,17 @@ if __name__ == "__main__":
     pump_count = int(df["whale_pump_flag"].sum()) if "whale_pump_flag" in df.columns else 0
     log(f"[scan] whale accumulations: {whale_count} · whale pumps: {pump_count}")
 
+    # Liquidations (Coinalyze, batched) + taker ratio: fetched before the CSV
+    # because the squeeze ignition reads both. Missing key or blocked source
+    # degrades to empty output so GitHub Pages still builds.
+    log(f"[scan] fetching liquidations for {len(details)} pairs…")
+    liquidation_details = _fetch_liquidations_for_details(details, settings)
+    log(f"[scan] liquidations fetched ({len(liquidation_details)} pairs)")
+    taker_map = {sym: fetch_taker_ratio_history(sym, period="4h") for sym in sorted({s for s, _ in details})}
+    df = _enrich_with_squeeze_ignition(df, details, liquidation_details, taker_map, settings)
+    ignition_count = int(df["squeeze_ignition_flag"].sum()) if "squeeze_ignition_flag" in df.columns else 0
+    log(f"[scan] squeeze ignitions: {ignition_count}")
+
     # Latest scan CSV
     latest_csv = ROOT / "data" / "latest_scan.csv"
     latest_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -372,11 +448,6 @@ if __name__ == "__main__":
     _export_charts(details, ROOT / "data" / "charts", ls_map=ls_map)
     log(f"[scan] chart JSONs written")
 
-    # Liquidation overlays for the HTML dashboard. Coinalyze (free REST tier)
-    # is the single source: missing key or blocked source degrades to empty
-    # output so GitHub Pages still builds.
-    log(f"[scan] fetching liquidations for {len(details)} pairs…")
-    liquidation_details = _fetch_liquidations_for_details(details, settings)
     _export_liquidations(liquidation_details, ROOT / "data" / "liquidations")
     log(f"[scan] liquidations written ({len(liquidation_details)} pairs)")
 

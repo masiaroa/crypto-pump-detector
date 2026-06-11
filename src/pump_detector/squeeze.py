@@ -34,6 +34,12 @@ DEFAULT_SQUEEZE_SETTINGS = {
     "compression_percentile": 15,
     "setup_score_min": 55,
     "setup_min_oi_points": 15,
+    "ignition_lookback": 6,
+    "ignition_min_prior_score": 45,
+    "ignition_price_zscore": 1.0,
+    "ignition_short_liq_zscore": 2.0,
+    "ignition_taker_zscore": 2.0,
+    "ignition_short_covering_return": 0.02,
     # Component weights — tune (or zero out) the signals you trust less.
     "weight_oi_build": 35,
     "weight_stop_magnet": 15,
@@ -140,6 +146,79 @@ def latest_score_with_ls(
     points_ls = weight_ls * (0.8 * crowding + (0.2 if ls_falling else 0.0))
     score = round(float(100.0 * (points + points_ls) / (available + weight_ls)), 1)
     return score, _setup_flag(score, oi_points, cfg)
+
+
+def squeeze_ignition(
+    history_scores: pd.Series,
+    latest_row: pd.Series,
+    short_liq_z: float,
+    taker_z: float,
+    settings: dict | None = None,
+) -> bool:
+    """The squeeze setup just fired: shorts are being forced out.
+
+    Requires a recent setup read in the prior candles plus a strong green
+    candle, confirmed by at least one of: a short-liquidation spike, short
+    covering (price jumping while OI drops = shorts closing), or an
+    aggressive taker-buy burst.
+    """
+    cfg = _cfg(settings)
+    lookback = int(cfg["ignition_lookback"])
+    prior = history_scores.iloc[-(lookback + 1) : -1] if len(history_scores) > 1 else history_scores
+    if prior.empty or prior.max() < float(cfg["ignition_min_prior_score"]):
+        return False
+    price_return = float(latest_row.get("price_return_pct") or 0.0)
+    green = price_return > 0 and bool(latest_row.get("close_near_high"))
+    impulse = float(latest_row.get("price_return_zscore") or 0.0) >= float(cfg["ignition_price_zscore"])
+    short_covering = (
+        price_return >= float(cfg["ignition_short_covering_return"])
+        and float(latest_row.get("oi_change_pct") or 0.0) < 0
+    )
+    trigger = (
+        short_liq_z >= float(cfg["ignition_short_liq_zscore"])
+        or short_covering
+        or taker_z >= float(cfg["ignition_taker_zscore"])
+    )
+    return bool(green and impulse and trigger)
+
+
+def short_liq_zscore(liq_frame: pd.DataFrame | None, candle_timestamps: pd.Series, lookback: int = 50) -> float:
+    """Z-score of the newest candle's short-liquidation notional vs history.
+
+    Buckets the Coinalyze rows onto the candle grid; a burst of shorts
+    being liquidated as price ticks up is the squeeze actually firing.
+    """
+    if liq_frame is None or liq_frame.empty or "side" not in liq_frame.columns:
+        return 0.0
+    shorts = liq_frame[liq_frame["side"].astype(str).str.lower() == "short"]
+    if shorts.empty or candle_timestamps.empty:
+        return 0.0
+    ts = pd.to_datetime(candle_timestamps).reset_index(drop=True)
+    positions = ts.searchsorted(pd.to_datetime(shorts["timestamp"]), side="right") - 1
+    sums = pd.Series(0.0, index=range(len(ts)))
+    grouped = pd.Series(shorts["notional"].to_numpy(), index=positions)
+    grouped = grouped[grouped.index >= 0].groupby(level=0).sum()
+    sums.update(grouped)
+    return _last_value_zscore(sums, lookback)
+
+
+def taker_ratio_zscore(points: list[dict], lookback: int = 50) -> float:
+    """Z-score of the latest taker buy-ratio vs its own history."""
+    values = pd.Series([p.get("buy_ratio", 0.0) for p in points if p.get("buy_ratio", 0.0) > 0], dtype=float)
+    return _last_value_zscore(values, lookback)
+
+
+def _last_value_zscore(values: pd.Series, lookback: int) -> float:
+    if len(values) < 10:
+        return 0.0
+    last = float(values.iloc[-1])
+    history = values.iloc[-(lookback + 1) : -1]
+    mean = float(history.mean())
+    std = float(history.std(ddof=0))
+    if std <= 0:
+        # Flat history (e.g. zero liquidations for weeks): any positive jump is a spike.
+        return 5.0 if last > mean else 0.0
+    return round((last - mean) / std, 2)
 
 
 def ls_history_falling(points: list[dict], window: int = 6) -> bool:
@@ -308,4 +387,7 @@ __all__ = [
     "compute_squeeze_columns",
     "latest_score_with_ls",
     "ls_history_falling",
+    "squeeze_ignition",
+    "short_liq_zscore",
+    "taker_ratio_zscore",
 ]

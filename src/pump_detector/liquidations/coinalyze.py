@@ -247,6 +247,80 @@ def fetch_coinalyze_liquidations(
     return frame
 
 
+def fetch_coinalyze_liquidations_batch(
+    raw_symbols: list[str],
+    timeframe: str,
+    cfg: dict[str, Any] | None = None,
+    *,
+    session: requests.Session | None = None,
+    now_s: int | None = None,
+    chunk_size: int = 20,
+) -> dict[str, pd.DataFrame]:
+    """Fetch liquidations for many symbols in few requests.
+
+    Coinalyze accepts comma-joined symbols, so a 40-symbol watchlist needs
+    2 calls per timeframe instead of 40 — important on the free tier's
+    40 req/min budget. Returns {raw_symbol: frame}; symbols that fail to
+    resolve or return nothing are simply absent. Never raises.
+    """
+    cfg = dict(cfg or {})
+    if not cfg.get("enabled", True):
+        return {}
+    api_key = (cfg.get("api_key") or os.environ.get("COINALYZE_API_KEY", "")).strip()
+    if not api_key:
+        return {}
+
+    http = session or requests.Session()
+    markets = _load_markets_cache(http, api_key)
+    resolved: dict[str, str] = {}
+    for raw_symbol in raw_symbols:
+        cg_symbol = coinalyze_symbol(raw_symbol, markets)
+        if cg_symbol:
+            resolved[cg_symbol] = raw_symbol
+
+    to_s = int(now_s if now_s is not None else time.time())
+    from_s = to_s - _lookback_seconds(timeframe)
+    result: dict[str, pd.DataFrame] = {}
+    cg_symbols = list(resolved)
+    for start in range(0, len(cg_symbols), chunk_size):
+        chunk = cg_symbols[start : start + chunk_size]
+        if start:
+            time.sleep(1.6)  # stay comfortably under 40 req/min
+        params = {
+            "symbols": ",".join(chunk),
+            "interval": _coinalyze_interval(timeframe),
+            "from": from_s,
+            "to": to_s,
+            "convert_to_usd": "true",
+        }
+        try:
+            response = http.get(
+                LIQ_ENDPOINT,
+                headers={"api_key": api_key, "Accept": "application/json"},
+                params=params,
+                timeout=20,
+            )
+            if response.status_code != 200:
+                log.debug("coinalyze batch %s -> %s", chunk, response.status_code)
+                continue
+            payload = response.json()
+        except Exception as exc:  # noqa: BLE001
+            log.debug("coinalyze batch fetch failed: %s", exc)
+            continue
+        if not isinstance(payload, list):
+            continue
+        for series in payload:
+            if not isinstance(series, dict):
+                continue
+            raw_symbol = resolved.get(str(series.get("symbol", "")))
+            if not raw_symbol:
+                continue
+            frame = parse_coinalyze_liquidations([series])
+            if not frame.empty:
+                result[raw_symbol] = frame
+    return result
+
+
 def fetch_coinalyze_liquidations_with_diagnostic(
     raw_symbol: str,
     timeframe: str,
@@ -358,6 +432,7 @@ __all__ = [
     "MARKETS_ENDPOINT",
     "coinalyze_symbol",
     "fetch_coinalyze_liquidations",
+    "fetch_coinalyze_liquidations_batch",
     "fetch_coinalyze_liquidations_with_diagnostic",
     "parse_coinalyze_liquidations",
 ]

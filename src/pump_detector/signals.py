@@ -59,6 +59,9 @@ class SignalSnapshot:
     coiled_spring_flag: bool = False
     stop_cluster_distance_pct: float = 0.0
     stop_cluster_strength: float = 0.0
+    squeeze_ignition_flag: bool = False
+    short_liq_zscore: float = 0.0
+    taker_buy_ratio_zscore: float = 0.0
     whale_accum_score: float = 0.0
     whale_flow_points: float = 0.0
     whale_accum_flag: bool = False

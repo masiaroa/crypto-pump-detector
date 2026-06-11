@@ -183,6 +183,54 @@ def fetch_top_position_ratio_history(
         return []
 
 
+def fetch_taker_ratio_history(
+    raw_symbol: str,
+    period: str = "4h",
+    limit: int = 120,
+    *,
+    session: requests.Session | None = None,
+) -> list[dict]:
+    """Taker (aggressive) buy/sell volume ratio history from Binance USDM.
+
+    Returns [{timestamp_ms, buy_ratio}] oldest-first, where buy_ratio is the
+    taker-buy share of taker volume (0.5 = balanced). [] on any failure or
+    for COIN-M symbols (different payload shape, not worth a second parser).
+    """
+    market = normalize_symbol(raw_symbol)
+    if not market.supported or market.quote == "USD":
+        return []
+    http = session or requests.Session()
+    try:
+        response = http.get(
+            "https://fapi.binance.com/futures/data/takerlongshortRatio",
+            params={
+                "symbol": f"{market.base}USDT",
+                "period": _BINANCE_PERIODS.get(period, "4h"),
+                "limit": min(limit, 500),
+            },
+            timeout=10,
+        )
+        if response.status_code != 200:
+            return []
+        payload = response.json()
+        if not isinstance(payload, list):
+            return []
+        result = []
+        for row in payload:
+            buy_vol = _to_float(row.get("buyVol"))
+            sell_vol = _to_float(row.get("sellVol"))
+            total = buy_vol + sell_vol
+            if total <= 0:
+                continue
+            result.append({
+                "timestamp_ms": int(_to_float(row.get("timestamp", 0))),
+                "buy_ratio": buy_vol / total,
+            })
+        return result  # Binance returns oldest-first
+    except Exception:  # noqa: BLE001 - degrade silently
+        return []
+
+
 def fetch_global_long_short_history(
     raw_symbol: str,
     period: str = "4h",
@@ -340,4 +388,5 @@ __all__ = [
     "fetch_long_short_history",
     "fetch_top_position_ratio_history",
     "fetch_global_long_short_history",
+    "fetch_taker_ratio_history",
 ]

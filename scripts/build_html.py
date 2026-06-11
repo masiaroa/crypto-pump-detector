@@ -462,10 +462,12 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
         oi_surge = bool(row.get("oi_surge_flag"))
         vol_surge = bool(row.get("volume_surge_flag"))
         squeeze_flag = bool(row.get("squeeze_setup_flag"))
+        squeeze_ignition = bool(row.get("squeeze_ignition_flag"))
         whale_flag = bool(row.get("whale_accum_flag"))
         whale_pump = bool(row.get("whale_pump_flag"))
         priority = (
-            6 if has_signal
+            7 if has_signal
+            else 6 if squeeze_ignition
             else 5 if whale_pump
             else 4 if squeeze_flag
             else 3 if whale_flag
@@ -482,6 +484,7 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
             "oi_surge": oi_surge,
             "vol_surge": vol_surge,
             "squeeze_flag": squeeze_flag,
+            "squeeze_ignition": squeeze_ignition,
             "squeeze": safe_float(row.get("squeeze_setup_score", 0)),
             "whale_flag": whale_flag,
             "whale_pump": whale_pump,
@@ -511,7 +514,7 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
         label = esc(_short_base(r["symbol"]))
         if r["has_signal"]:
             icon = "🟢"
-        elif r["whale_pump"]:
+        elif r["squeeze_ignition"] or r["whale_pump"]:
             icon = "🔴"
         elif r["squeeze_flag"] or r["whale_flag"]:
             icon = "🟣"
@@ -522,6 +525,8 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
         sig_chips = ""
         if r["has_signal"]:
             sig_chips += '<span class="sig-chip sig-entry">ENTRY</span>'
+        if r["squeeze_ignition"]:
+            sig_chips += '<span class="sig-chip sig-ignition" title="Squeeze disparándose: setup previo + vela verde con liquidaciones de shorts / short covering / compra agresiva">IGNITION</span>'
         if r["whale_pump"]:
             sig_chips += '<span class="sig-chip sig-pump" title="Acumulación previa + vela verde con volumen + retail entrando">WHALE&nbsp;PUMP</span>'
         if r["squeeze_flag"]:
@@ -882,6 +887,7 @@ html, body {
 .sig-squeeze { background: #3b1d2e; color: #f778ba; }
 .sig-whale { background: #102a3d; color: #58a6ff; }
 .sig-pump  { background: #4b1113; color: #ff7b72; }
+.sig-ignition { background: #f85149; color: #0d1117; }
 .sig-spot  { background: #1f2a1a; color: #9ece6a; }
 .last-event-cell { white-space: nowrap; }
 .event-date { color: #6e7681; font-size: 10px; }
