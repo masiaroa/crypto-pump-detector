@@ -12,6 +12,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$SCRIPT_DIR"
 
+BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+if [ "$BRANCH" != "main" ]; then
+  echo "ℹ️  Estas en la rama '$BRANCH'. Delegando en scripts/branch-refresh.sh para configurar upstream y desplegar desde la rama."
+  exec ./scripts/branch-refresh.sh
+fi
+
 LOCK="/tmp/crypto-pump-refresh.lock"
 exec 9>"$LOCK"
 flock -n 9 || { echo "[$(date -Iseconds)] otro refresh en curso, abortando"; exit 0; }

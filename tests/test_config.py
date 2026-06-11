@@ -103,3 +103,14 @@ def test_load_settings_includes_liquidation_defaults(monkeypatch):
     # WS burst + projected blocks were removed in favour of coinalyze-only.
     assert "executed" not in settings.liquidations
     assert "projected" not in settings.liquidations
+
+
+def test_load_settings_includes_coinalyze_dashboard_defaults(monkeypatch):
+    monkeypatch.delenv("SCAN_TIMEFRAME", raising=False)
+    settings = load_settings()
+
+    assert settings.coinalyze_dashboard["enabled"] is True
+    assert settings.coinalyze_dashboard["timeframes"] == ["4h", "1d"]
+    assert settings.coinalyze_dashboard["cache_dir"] == "data/coinalyze"
+    assert settings.coinalyze_dashboard["max_age_hours"] == 6
+    assert settings.coinalyze_dashboard["core_exchanges"] == ["BINANCE", "BYBIT", "OKX"]

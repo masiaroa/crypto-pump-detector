@@ -52,6 +52,13 @@ def test_build_html_includes_explicit_wheel_and_touch_slide_navigation():
     assert "addEventListener('touchend'" in html
 
 
+def test_build_html_links_to_coinalyze_metrics_dashboard():
+    html = build_html([], {}, charts={})
+
+    assert 'href="coinalyze.html"' in html
+    assert "Coinalyze metrics" in html
+
+
 def test_build_html_handles_placeholder_metrics_and_renders_market_header():
     charts = {
         "BYBIT:ADAUSDT.P": [

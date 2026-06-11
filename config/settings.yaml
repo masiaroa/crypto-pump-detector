@@ -40,3 +40,15 @@ liquidations:
     # https://coinalyze.net/account/api-key/ y export COINALYZE_API_KEY=...
     # Sin key se omite silenciosamente. 40 req/min.
     enabled: true
+
+coinalyze_dashboard:
+  enabled: true
+  timeframes:
+  - 4h
+  - 1d
+  cache_dir: data/coinalyze
+  max_age_hours: 6
+  core_exchanges:
+  - BINANCE
+  - BYBIT
+  - OKX

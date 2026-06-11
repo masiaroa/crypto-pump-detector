@@ -28,6 +28,7 @@ class Settings:
     thresholds: dict[str, Any]
     storage: dict[str, Any]
     liquidations: dict[str, Any] = field(default_factory=dict)
+    coinalyze_dashboard: dict[str, Any] = field(default_factory=dict)
 
 
 DEFAULT_SETTINGS = {
@@ -59,14 +60,21 @@ DEFAULT_SETTINGS = {
         "sqlite_path": "data/signals.sqlite",
         "alerts_csv": "data/alerts.csv",
     },
-        "liquidations": {
+    "liquidations": {
+        "enabled": True,
+        "coinalyze": {
+            # Single source: Coinalyze historical aggregated liquidations
+            # (free tier). Requires COINALYZE_API_KEY in the environment.
             "enabled": True,
-            "coinalyze": {
-                # Single source: Coinalyze historical aggregated liquidations
-                # (free tier). Requires COINALYZE_API_KEY in the environment.
-                "enabled": True,
-            },
         },
+    },
+    "coinalyze_dashboard": {
+        "enabled": True,
+        "timeframes": ["4h", "1d"],
+        "cache_dir": "data/coinalyze",
+        "max_age_hours": 6,
+        "core_exchanges": ["BINANCE", "BYBIT", "OKX"],
+    },
 }
 
 
@@ -85,6 +93,8 @@ def load_settings(path: Path | None = None) -> Settings:
     ensure_default_files()
     raw = read_yaml(path or CONFIG_DIR / "settings.yaml")
     merged = DEFAULT_SETTINGS | (raw or {})
+    for key in ("alert_conditions", "thresholds", "storage", "liquidations", "coinalyze_dashboard"):
+        merged[key] = dict(DEFAULT_SETTINGS.get(key, {})) | dict((raw or {}).get(key, {}) or {})
 
     # Allow env-var override: SCAN_TIMEFRAME=1d or SCAN_TIMEFRAME=4h,1d
     env_tf = os.environ.get("SCAN_TIMEFRAME", "").strip()
@@ -104,6 +114,7 @@ def load_settings(path: Path | None = None) -> Settings:
         thresholds=dict(merged["thresholds"]),
         storage=dict(merged["storage"]),
         liquidations=dict(merged["liquidations"]),
+        coinalyze_dashboard=dict(merged["coinalyze_dashboard"]),
     )
 
 

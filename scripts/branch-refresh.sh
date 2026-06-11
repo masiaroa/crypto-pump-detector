@@ -17,7 +17,7 @@
 # Requiere: gh CLI autenticado (`gh auth status`).
 #
 # Uso:
-#   ./scripts/refresh-from-branch.sh
+#   ./scripts/branch-refresh.sh
 
 set -euo pipefail
 
@@ -67,11 +67,12 @@ git add -f data/charts data/liquidations 2>/dev/null || true
 git add -f data/latest_scan.csv data/event_history.csv 2>/dev/null || true
 
 if git diff --cached --quiet; then
-  echo "Sin diffs respecto al repo — no se commitea, pero igualmente dispararemos el deploy."
+  echo "Sin diffs respecto al repo — no se commitea."
 else
   git commit -m "data: refresh from branch $BRANCH $(date -u +%Y-%m-%dT%H:%MZ)"
-  git push -u origin "$BRANCH"
 fi
+
+git push -u origin "$BRANCH"
 
 echo "[$(date -Iseconds)] === disparando workflow Pages desde $BRANCH ==="
 gh workflow run pages.yml --ref "$BRANCH"

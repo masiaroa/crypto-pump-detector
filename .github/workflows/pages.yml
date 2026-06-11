@@ -19,6 +19,7 @@ on:
       - "scripts/**"
       - "data/charts/**"
       - "data/liquidations/**"
+      - "data/coinalyze/**"
       - "data/latest_scan.csv"
       - "data/event_history.csv"
 
@@ -61,12 +62,20 @@ jobs:
       - name: Validate static HTML dashboard
         run: python scripts/validate_static_html.py docs/index.html
 
+      - name: Build Coinalyze metrics dashboard
+        run: PYTHONPATH=src python scripts/build_coinalyze_html.py
+
+      - name: Validate Coinalyze metrics dashboard
+        run: python scripts/validate_coinalyze_html.py docs/coinalyze.html
+
       - name: Show generated file info
         run: |
           ls -lh docs/index.html
+          ls -lh docs/coinalyze.html
           echo "Slides: $(grep -c 'class=\"slide\"' docs/index.html)"
           echo "Chart JSON files: $([ -d data/charts ] && find data/charts -name '*.json' | wc -l || echo 0)"
           echo "Liquidation JSON files: $([ -d data/liquidations ] && find data/liquidations -name '*.json' ! -name '_*' | wc -l || echo 0)"
+          echo "Coinalyze cache files: $([ -d data/coinalyze ] && find data/coinalyze -name '*.json' ! -name '_*' | wc -l || echo 0)"
           echo "WS history lines: $([ -f data/liquidations/_ws_history.jsonl ] && wc -l < data/liquidations/_ws_history.jsonl || echo 0)"
 
       - name: Upload Pages artifact

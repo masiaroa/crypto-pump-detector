@@ -1,0 +1,746 @@
+{
+  "generated_at": "2026-06-07T09:03:14Z",
+  "enabled": true,
+  "cache_dir": "data/coinalyze",
+  "symbols": [
+    {
+      "base": "AAVE",
+      "raw_symbol": "BYBIT:AAVEUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/AAVE_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "AAVE",
+      "raw_symbol": "BYBIT:AAVEUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/AAVE_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "ADA",
+      "raw_symbol": "BYBIT:ADAUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/ADA_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "ADA",
+      "raw_symbol": "BYBIT:ADAUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/ADA_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "APT",
+      "raw_symbol": "BYBIT:APTUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/APT_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "APT",
+      "raw_symbol": "BYBIT:APTUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/APT_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "ARB",
+      "raw_symbol": "BINANCE:ARBUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/ARB_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "ARB",
+      "raw_symbol": "BINANCE:ARBUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/ARB_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "ATOM",
+      "raw_symbol": "BINANCE:ATOMUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/ATOM_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "ATOM",
+      "raw_symbol": "BINANCE:ATOMUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/ATOM_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "AVAX",
+      "raw_symbol": "BYBIT:AVAXUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/AVAX_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "AVAX",
+      "raw_symbol": "BYBIT:AVAXUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/AVAX_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "BCH",
+      "raw_symbol": "BINANCE:BCHUSD.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/BCH_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "BCH",
+      "raw_symbol": "BINANCE:BCHUSD.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/BCH_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "BNB",
+      "raw_symbol": "BYBIT:BNBUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/BNB_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "BNB",
+      "raw_symbol": "BYBIT:BNBUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/BNB_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "BTC",
+      "raw_symbol": "BYBIT:BTCUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/BTC_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "BTC",
+      "raw_symbol": "BYBIT:BTCUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/BTC_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "DOGE",
+      "raw_symbol": "BYBIT:DOGEUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/DOGE_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "DOGE",
+      "raw_symbol": "BYBIT:DOGEUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/DOGE_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "DOT",
+      "raw_symbol": "BYBIT:DOTUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/DOT_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "DOT",
+      "raw_symbol": "BYBIT:DOTUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/DOT_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "ETC",
+      "raw_symbol": "BINANCE:ETCUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/ETC_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "ETC",
+      "raw_symbol": "BINANCE:ETCUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/ETC_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "ETH",
+      "raw_symbol": "BYBIT:ETHUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/ETH_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "ETH",
+      "raw_symbol": "BYBIT:ETHUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/ETH_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "FIL",
+      "raw_symbol": "BITGET:FILUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/FIL_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "FIL",
+      "raw_symbol": "BITGET:FILUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/FIL_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "S",
+      "raw_symbol": "BINANCE:SUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/S_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "S",
+      "raw_symbol": "BINANCE:SUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/S_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "HBAR",
+      "raw_symbol": "BYBIT:HBARUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/HBAR_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "HBAR",
+      "raw_symbol": "BYBIT:HBARUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/HBAR_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "HYPE",
+      "raw_symbol": "BYBIT:HYPEUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/HYPE_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "HYPE",
+      "raw_symbol": "BYBIT:HYPEUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/HYPE_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "INJ",
+      "raw_symbol": "BINANCE:INJUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/INJ_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "INJ",
+      "raw_symbol": "BINANCE:INJUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/INJ_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "LINK",
+      "raw_symbol": "BINANCE:LINKUSD.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/LINK_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "LINK",
+      "raw_symbol": "BINANCE:LINKUSD.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/LINK_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "LTC",
+      "raw_symbol": "BYBIT:LTCUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/LTC_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "LTC",
+      "raw_symbol": "BYBIT:LTCUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/LTC_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "MANA",
+      "raw_symbol": "OKX:MANAUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/MANA_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "MANA",
+      "raw_symbol": "OKX:MANAUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/MANA_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "NEAR",
+      "raw_symbol": "BINANCE:NEARUSD.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/NEAR_4h.json",
+      "rows": 528,
+      "contracts": 2
+    },
+    {
+      "base": "NEAR",
+      "raw_symbol": "BINANCE:NEARUSD.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/NEAR_1d.json",
+      "rows": 244,
+      "contracts": 2
+    },
+    {
+      "base": "NEO",
+      "raw_symbol": "BINANCE:NEOUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/NEO_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "NEO",
+      "raw_symbol": "BINANCE:NEOUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/NEO_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "ONDO",
+      "raw_symbol": "BINANCE:ONDOUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/ONDO_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "ONDO",
+      "raw_symbol": "BINANCE:ONDOUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/ONDO_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "OP",
+      "raw_symbol": "BYBIT:OPUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/OP_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "OP",
+      "raw_symbol": "BYBIT:OPUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/OP_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "PEPE",
+      "raw_symbol": "OKX:PEPEUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/PEPE_4h.json",
+      "rows": 528,
+      "contracts": 1
+    },
+    {
+      "base": "PEPE",
+      "raw_symbol": "OKX:PEPEUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/PEPE_1d.json",
+      "rows": 244,
+      "contracts": 1
+    },
+    {
+      "base": "POL",
+      "raw_symbol": "BYBIT:POLUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/POL_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "POL",
+      "raw_symbol": "BYBIT:POLUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/POL_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "RENDER",
+      "raw_symbol": "BYBIT:RENDERUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/RENDER_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "RENDER",
+      "raw_symbol": "BYBIT:RENDERUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/RENDER_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "RUNE",
+      "raw_symbol": "BINANCE:RUNEUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/RUNE_4h.json",
+      "rows": 528,
+      "contracts": 2
+    },
+    {
+      "base": "RUNE",
+      "raw_symbol": "BINANCE:RUNEUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/RUNE_1d.json",
+      "rows": 244,
+      "contracts": 2
+    },
+    {
+      "base": "SAND",
+      "raw_symbol": "BYBIT:SANDUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/SAND_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "SAND",
+      "raw_symbol": "BYBIT:SANDUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/SAND_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "SOL",
+      "raw_symbol": "BINANCE:SOLUSD.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/SOL_4h.json",
+      "rows": 528,
+      "contracts": 2
+    },
+    {
+      "base": "SOL",
+      "raw_symbol": "BINANCE:SOLUSD.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/SOL_1d.json",
+      "rows": 244,
+      "contracts": 2
+    },
+    {
+      "base": "SUI",
+      "raw_symbol": "BYBIT:SUIUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/SUI_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "SUI",
+      "raw_symbol": "BYBIT:SUIUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/SUI_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "TAO",
+      "raw_symbol": "BINANCE:TAOUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/TAO_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "TAO",
+      "raw_symbol": "BINANCE:TAOUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/TAO_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "THETA",
+      "raw_symbol": "BYBIT:THETAUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/THETA_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "THETA",
+      "raw_symbol": "BYBIT:THETAUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/THETA_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "TIA",
+      "raw_symbol": "BYBIT:TIAUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/TIA_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "TIA",
+      "raw_symbol": "BYBIT:TIAUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/TIA_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "TON",
+      "raw_symbol": "BYBIT:TONUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/TON_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "TON",
+      "raw_symbol": "BYBIT:TONUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/TON_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "UNI",
+      "raw_symbol": "BYBIT:UNIUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/UNI_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "UNI",
+      "raw_symbol": "BYBIT:UNIUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/UNI_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "VIRTUAL",
+      "raw_symbol": "BINANCE:VIRTUALUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/VIRTUAL_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "VIRTUAL",
+      "raw_symbol": "BINANCE:VIRTUALUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/VIRTUAL_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "XLM",
+      "raw_symbol": "BINANCE:XLMUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/XLM_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "XLM",
+      "raw_symbol": "BINANCE:XLMUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/XLM_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "XRP",
+      "raw_symbol": "BYBIT:XRPUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/XRP_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "XRP",
+      "raw_symbol": "BYBIT:XRPUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/XRP_1d.json",
+      "rows": 244,
+      "contracts": 3
+    },
+    {
+      "base": "ZEC",
+      "raw_symbol": "BYBIT:ZECUSDT.P",
+      "timeframe": "4h",
+      "status": "refreshed",
+      "path": "data/coinalyze/ZEC_4h.json",
+      "rows": 528,
+      "contracts": 3
+    },
+    {
+      "base": "ZEC",
+      "raw_symbol": "BYBIT:ZECUSDT.P",
+      "timeframe": "1d",
+      "status": "refreshed",
+      "path": "data/coinalyze/ZEC_1d.json",
+      "rows": 244,
+      "contracts": 3
+    }
+  ],
+  "diagnostics": []
+}

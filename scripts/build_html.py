@@ -544,7 +544,10 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
           <span class="logo">📈</span>
           <span>Crypto Pump Detector</span>
         </div>
-        <span class="scan-time">Last scan: {esc(now_str)} &middot; {len(scan)} symbols</span>
+        <div class="header-actions">
+          <a class="header-link" href="coinalyze.html">Coinalyze metrics</a>
+          <span class="scan-time">Last scan: {esc(now_str)} &middot; {len(scan)} symbols</span>
+        </div>
       </div>
       <div class="slide-body">
         {overview_table_html}
@@ -712,6 +715,13 @@ html, body {
 .events-title { display: flex; align-items: center; gap: 8px; font-size: 17px; font-weight: 700; }
 .logo { font-size: 20px; }
 .scan-time { color: #8b949e; font-size: 11px; }
+.header-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.header-link {
+  color: #58a6ff; text-decoration: none; font-size: 11px; font-weight: 800;
+  background: #21262d; border: 1px solid #30363d; border-radius: 6px;
+  padding: 4px 8px;
+}
+.header-link:hover { color: #79c0ff; border-color: #58a6ff; background: #30363d; }
 
 .crypto-header { gap: 6px; }
 .crypto-title { display: flex; align-items: center; gap: 8px; }

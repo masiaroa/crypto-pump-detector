@@ -103,6 +103,18 @@ python scripts/validate_static_html.py docs/index.html
 python -m http.server 8000 --directory docs   # http://localhost:8000
 ```
 
+Dashboard Coinalyze-style (opcional, requiere `COINALYZE_API_KEY` para refrescar datos):
+
+```bash
+PYTHONPATH=src python scripts/coinalyze_refresh.py --force
+PYTHONPATH=src python scripts/build_coinalyze_html.py
+python scripts/validate_coinalyze_html.py docs/coinalyze.html
+```
+
+El HTML resultante vive en `docs/coinalyze.html`. Si no existe cache en
+`data/coinalyze/`, el build genera una pantalla de setup en vez de romper el
+deploy de Pages.
+
 GitHub Pages se publica desde GitHub Actions como artifact, sin commits
 automaticos al repo. Configuracion necesaria una vez:
 
