@@ -164,6 +164,50 @@ def _funding_limit_for_timeframe(timeframe: str, candle_limit: int) -> int:
     return max(200, days * 3 + 10)
 
 
+# Premium-index (basis) history is only needed for a z-score/percentile, so a
+# single page per symbol is enough — keeps the extra request budget at +1.
+_BASIS_HISTORY_LIMIT = 200
+
+
+def _basis_frame_from_klines(rows: list, close_index: int = 4) -> pd.DataFrame:
+    """[openTime, open, high, low, close, ...] kline rows → [timestamp, basis_pct]."""
+    if not rows:
+        return pd.DataFrame()
+    frame = pd.DataFrame(rows).iloc[:, [0, close_index]]
+    frame.columns = ["timestamp", "basis_pct"]
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"].astype("int64"), unit="ms", utc=True)
+    frame["basis_pct"] = pd.to_numeric(frame["basis_pct"], errors="coerce")
+    return frame.dropna(subset=["basis_pct"]).sort_values("timestamp")
+
+
+def _fetch_bybit_premium_index(symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
+    interval = {"1h": "60", "4h": "240", "1d": "D"}[timeframe]
+    rows = _get_paginated_rows(
+        "https://api.bybit.com/v5/market/premium-index-price-kline",
+        {"category": "linear", "symbol": symbol, "interval": interval},
+        limit=min(limit, _BASIS_HISTORY_LIMIT),
+        page_size=200,
+        rows_from_payload=_result_list,
+        timestamp_key=0,
+        end_param="end",
+    )
+    return _basis_frame_from_klines(rows)
+
+
+def _fetch_binance_premium_index(symbol: str, timeframe: str, limit: int, coin_m: bool = False) -> pd.DataFrame:
+    interval = {"1h": "1h", "4h": "4h", "1d": "1d"}[timeframe]
+    base = "https://dapi.binance.com/dapi" if coin_m else "https://fapi.binance.com/fapi"
+    rows = _get_paginated_rows(
+        f"{base}/v1/premiumIndexKlines",
+        {"symbol": symbol, "interval": interval},
+        limit=min(limit, _BASIS_HISTORY_LIMIT),
+        page_size=500,
+        rows_from_payload=_payload_as_list,
+        timestamp_key=0,
+    )
+    return _basis_frame_from_klines(rows)
+
+
 def _fetch_bybit(market: MarketSymbol, timeframe: str, limit: int) -> pd.DataFrame:
     interval = {"1h": "60", "4h": "240", "1d": "D"}[timeframe]
     oi_interval = {"1h": "1h", "4h": "4h", "1d": "1d"}[timeframe]
@@ -220,7 +264,9 @@ def _fetch_bybit(market: MarketSymbol, timeframe: str, limit: int) -> pd.DataFra
         funding["funding_rate"] = pd.to_numeric(funding["fundingRate"], errors="coerce")
         funding = funding[["timestamp", "funding_rate"]].sort_values("timestamp")
 
-    return _merge_market_frames(ohlcv, oi, funding)
+    basis = _safe_basis(_fetch_bybit_premium_index, symbol, timeframe, limit)
+
+    return _merge_market_frames(ohlcv, oi, funding, basis)
 
 
 def _fetch_binance(market: MarketSymbol, timeframe: str, limit: int) -> pd.DataFrame:
@@ -260,6 +306,8 @@ def _fetch_binance_usdt_m(market: MarketSymbol, timeframe: str, limit: int) -> p
         ],
     )
     ohlcv = _numeric_frame(ohlcv, ["open", "high", "low", "close", "volume"])
+    # Aggressive-buy volume per candle (same base unit as `volume`) — feeds CVD.
+    ohlcv["taker_buy_volume"] = pd.to_numeric(ohlcv["taker_base"], errors="coerce")
     ohlcv["timestamp"] = pd.to_datetime(ohlcv["timestamp"].astype("int64"), unit="ms", utc=True)
 
     oi_raw = _get_paginated_rows(
@@ -294,7 +342,9 @@ def _fetch_binance_usdt_m(market: MarketSymbol, timeframe: str, limit: int) -> p
         funding["funding_rate"] = pd.to_numeric(funding["fundingRate"], errors="coerce")
         funding = funding[["timestamp", "funding_rate"]]
 
-    return _merge_market_frames(ohlcv.sort_values("timestamp"), oi.sort_values("timestamp"), funding.sort_values("timestamp"))
+    basis = _safe_basis(_fetch_binance_premium_index, symbol, timeframe, limit)
+
+    return _merge_market_frames(ohlcv.sort_values("timestamp"), oi.sort_values("timestamp"), funding.sort_values("timestamp"), basis)
 
 
 def _fetch_binance_coin_m_daily_oi_ohlc(pair: str, limit: int) -> pd.DataFrame:
@@ -354,6 +404,8 @@ def _fetch_binance_coin_m(market: MarketSymbol, timeframe: str, limit: int) -> p
         ],
     )
     ohlcv = _numeric_frame(ohlcv, ["open", "high", "low", "close", "volume"])
+    # COIN-M volume is in contracts; taker_volume (idx 9) is the matching unit.
+    ohlcv["taker_buy_volume"] = pd.to_numeric(ohlcv["taker_volume"], errors="coerce")
     ohlcv["timestamp"] = pd.to_datetime(ohlcv["timestamp"].astype("int64"), unit="ms", utc=True)
 
     oi_raw = _get_paginated_rows(
@@ -388,7 +440,9 @@ def _fetch_binance_coin_m(market: MarketSymbol, timeframe: str, limit: int) -> p
         funding["funding_rate"] = pd.to_numeric(funding["fundingRate"], errors="coerce")
     funding = funding[["timestamp", "funding_rate"]]
 
-    merged = _merge_market_frames(ohlcv.sort_values("timestamp"), oi.sort_values("timestamp"), funding.sort_values("timestamp"))
+    basis = _safe_basis(_fetch_binance_premium_index, symbol, timeframe, limit, coin_m=True)
+
+    merged = _merge_market_frames(ohlcv.sort_values("timestamp"), oi.sort_values("timestamp"), funding.sort_values("timestamp"), basis)
     if timeframe == "1d":
         oi_ohlc = _fetch_binance_coin_m_daily_oi_ohlc(pair, limit)
         if not oi_ohlc.empty:
@@ -427,12 +481,51 @@ def _fetch_bitget(market: MarketSymbol, timeframe: str, limit: int) -> pd.DataFr
     raise DataUnavailable("Bitget public client has no reliable historical OI endpoint in this MVP")
 
 
-def _merge_market_frames(ohlcv: pd.DataFrame, oi: pd.DataFrame, funding: pd.DataFrame) -> pd.DataFrame:
+def _safe_basis(fetcher: Callable[..., pd.DataFrame], symbol: str, timeframe: str, limit: int, **kwargs) -> pd.DataFrame:
+    """Premium-index history is an enhancement — never let it kill a symbol."""
+    try:
+        return fetcher(symbol, timeframe, limit, **kwargs)
+    except Exception:  # noqa: BLE001 - degrade to no-basis, same as empty funding
+        return pd.DataFrame()
+
+
+def _merge_market_frames(
+    ohlcv: pd.DataFrame,
+    oi: pd.DataFrame,
+    funding: pd.DataFrame,
+    basis: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     merged = pd.merge_asof(ohlcv.sort_values("timestamp"), oi.sort_values("timestamp"), on="timestamp", direction="backward")
     merged = pd.merge_asof(merged.sort_values("timestamp"), funding.sort_values("timestamp"), on="timestamp", direction="backward")
+    if basis is not None and not basis.empty:
+        merged = pd.merge_asof(merged.sort_values("timestamp"), basis.sort_values("timestamp"), on="timestamp", direction="backward")
+        merged["basis_pct"] = merged["basis_pct"].ffill()
     merged["open_interest"] = merged["open_interest"].ffill()
     merged["funding_rate"] = merged["funding_rate"].ffill()
     return merged.reset_index(drop=True)
+
+
+def fetch_spot_volumes(raw_symbol: str, timeframe: str = "4h", limit: int = 60) -> pd.Series:
+    """Binance spot kline volumes (base asset) for the symbol's BASE/USDT pair.
+
+    Used for the spot-vs-perp volume leadership read; spot-led moves are
+    real buying rather than leverage. Returns an empty Series on any
+    failure (no spot listing, network, geo-block).
+    """
+    market = normalize_symbol(raw_symbol)
+    if not market.supported:
+        return pd.Series(dtype=float)
+    interval = {"1h": "1h", "4h": "4h", "1d": "1d"}.get(timeframe, "4h")
+    try:
+        rows = _get_json(
+            "https://api.binance.com/api/v3/klines",
+            {"symbol": f"{market.base}USDT", "interval": interval, "limit": min(limit, 1000)},
+        )
+        if not isinstance(rows, list) or not rows:
+            return pd.Series(dtype=float)
+        return pd.Series([float(row[5]) for row in rows], dtype=float)
+    except Exception:  # noqa: BLE001 - enhancement only, degrade silently
+        return pd.Series(dtype=float)
 
 
 def _numeric_frame(df: pd.DataFrame, columns: Iterable[str]) -> pd.DataFrame:

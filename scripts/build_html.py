@@ -270,7 +270,21 @@ def funding_badge_class(fc: str) -> str:
         "POSITIVE": "badge-positive",
         "HOT":      "badge-hot",
         "EXTREME":  "badge-extreme",
+        # Basis (perp premium) buckets reuse the funding palette.
+        "DISCOUNT": "badge-negative",
+        "FLAT":     "badge-neutral",
+        "PREMIUM":  "badge-positive",
     }.get(str(fc), "badge-unknown")
+
+
+_BASIS_CLASSES = {"DISCOUNT", "FLAT", "PREMIUM", "HOT", "EXTREME"}
+
+
+def basis_badge_html(bc: str) -> str:
+    bc = str(bc)
+    if bc not in _BASIS_CLASSES:
+        return '<span class="muted">—</span>'
+    return f'<span class="badge {funding_badge_class(bc)}">{esc(bc)}</span>'
 
 
 def format_price(close: float) -> str:
@@ -337,6 +351,8 @@ def row_from_event(event: dict) -> dict:
         "oi_change_pct": event.get("oi_change_pct", 0),
         "signal_active": event.get("event_type") == "ENTRY",
         "alert_triggered": event.get("event_type") in {"ENTRY", "HOT_PRE_ENTRY"},
+        "squeeze_setup_score": event.get("squeeze_setup_score", 0),
+        "squeeze_setup_flag": event.get("event_type") == "SQUEEZE_SETUP",
     }
 
 
@@ -445,7 +461,20 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
         has_signal = bool(row.get("signal_active") or row.get("alert_triggered"))
         oi_surge = bool(row.get("oi_surge_flag"))
         vol_surge = bool(row.get("volume_surge_flag"))
-        priority = (3 if has_signal else 2 if oi_surge else 1 if vol_surge else 0)
+        squeeze_flag = bool(row.get("squeeze_setup_flag"))
+        squeeze_ignition = bool(row.get("squeeze_ignition_flag"))
+        whale_flag = bool(row.get("whale_accum_flag"))
+        whale_pump = bool(row.get("whale_pump_flag"))
+        priority = (
+            7 if has_signal
+            else 6 if squeeze_ignition
+            else 5 if whale_pump
+            else 4 if squeeze_flag
+            else 3 if whale_flag
+            else 2 if oi_surge
+            else 1 if vol_surge
+            else 0
+        )
         ev = latest_event.get(sym, {})
         overview_rows.append({
             "symbol": sym,
@@ -454,6 +483,13 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
             "has_signal": has_signal,
             "oi_surge": oi_surge,
             "vol_surge": vol_surge,
+            "squeeze_flag": squeeze_flag,
+            "squeeze_ignition": squeeze_ignition,
+            "squeeze": safe_float(row.get("squeeze_setup_score", 0)),
+            "whale_flag": whale_flag,
+            "whale_pump": whale_pump,
+            "whale": safe_float(row.get("whale_accum_score", 0)),
+            "spot_led": bool(row.get("spot_led_flag")),
             "bull": safe_float(row.get("early_bullish_score", 0)),
             "risk": safe_float(row.get("blowoff_risk_score", 0)),
             "close": safe_float(row.get("close", 0)),
@@ -461,6 +497,7 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
             "oi_3bar": safe_float(row.get("oi_3bar_change_pct", 0)),
             "vol_3bar": safe_float(row.get("volume_3bar_ratio", 0)),
             "funding": str(row.get("funding_classification", "UNKNOWN")),
+            "basis": str(row.get("basis_classification", "UNKNOWN")),
             "long_pct": safe_float(row.get("long_account_ratio", 0)),
             "short_pct": safe_float(row.get("short_account_ratio", 0)),
             "last_event_type": str(ev.get("event_type", "")),
@@ -469,13 +506,18 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
     overview_rows.sort(key=lambda r: (-r["priority"], -r["bull"], r["symbol"]))
 
     signal_count = sum(1 for r in overview_rows if r["has_signal"])
-    surge_count = sum(1 for r in overview_rows if (r["oi_surge"] or r["vol_surge"]) and not r["has_signal"])
+    squeeze_count = sum(1 for r in overview_rows if r["squeeze_flag"] and not r["has_signal"])
+    surge_count = sum(1 for r in overview_rows if (r["oi_surge"] or r["vol_surge"]) and not r["has_signal"] and not r["squeeze_flag"])
 
     overview_rows_html = ""
     for r in overview_rows:
         label = esc(_short_base(r["symbol"]))
         if r["has_signal"]:
             icon = "🟢"
+        elif r["squeeze_ignition"] or r["whale_pump"]:
+            icon = "🔴"
+        elif r["squeeze_flag"] or r["whale_flag"]:
+            icon = "🟣"
         elif r["oi_surge"] or r["vol_surge"]:
             icon = "🟡"
         else:
@@ -483,6 +525,16 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
         sig_chips = ""
         if r["has_signal"]:
             sig_chips += '<span class="sig-chip sig-entry">ENTRY</span>'
+        if r["squeeze_ignition"]:
+            sig_chips += '<span class="sig-chip sig-ignition" title="Squeeze disparándose: setup previo + vela verde con liquidaciones de shorts / short covering / compra agresiva">IGNITION</span>'
+        if r["whale_pump"]:
+            sig_chips += '<span class="sig-chip sig-pump" title="Acumulación previa + vela verde con volumen + retail entrando">WHALE&nbsp;PUMP</span>'
+        if r["squeeze_flag"]:
+            sig_chips += f'<span class="sig-chip sig-squeeze" title="Squeeze setup score {r["squeeze"]:.0f} — shorts atrapados">SQUEEZE</span>'
+        if r["whale_flag"] and not r["whale_pump"]:
+            sig_chips += f'<span class="sig-chip sig-whale" title="Whale accumulation score {r["whale"]:.0f} — manos fuertes acumulando">ACCUM</span>'
+        if r["spot_led"]:
+            sig_chips += '<span class="sig-chip sig-spot" title="Volumen spot ≥ volumen perp — compra real, no apalancada">SPOT-LED</span>'
         if r["oi_surge"]:
             sig_chips += f'<span class="sig-chip sig-oi" title="3-bar OI +{r["oi_3bar"]*100:.1f}%">OI&nbsp;SURGE</span>'
         if r["vol_surge"]:
@@ -502,6 +554,8 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
                 "HOT_PRE_ENTRY": "et-hot",
                 "OI_SURGE": "et-oi",
                 "VOLUME_SURGE": "et-vol",
+                "SQUEEZE_SETUP": "et-squeeze",
+                "WHALE_ACCUM": "et-whale",
             }.get(et, "et-pre")
             last_event_cell = (
                 f'<span class="event-type-badge {et_cls}">{esc(et)}</span>'
@@ -516,9 +570,12 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
             <td style="color:{change_color}">{esc(format_pct(r["change"]))}</td>
             <td style="color:{score_color(r["bull"])}">{r["bull"]:.0f}</td>
             <td style="color:#f85149">{r["risk"]:.0f}</td>
+            <td style="color:{score_color(r["squeeze"])}">{r["squeeze"]:.0f}</td>
+            <td style="color:{score_color(r["whale"])}">{r["whale"]:.0f}</td>
             <td style="color:{oi3_color}">{r["oi_3bar"]*100:+.1f}%</td>
             <td>{r["vol_3bar"]:.1f}x</td>
             <td><span class="badge {funding_badge_class(r["funding"])}">{esc(r["funding"])}</span></td>
+            <td>{basis_badge_html(r["basis"])}</td>
             <td style="color:{ls_color}">{esc(ls_label)}</td>
             <td class="sig-cell">{sig_chips}</td>
             <td class="last-event-cell">{last_event_cell}</td>
@@ -528,10 +585,10 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
     if overview_rows_html:
         overview_table_html = f"""
         <div class="events-table-wrap">
-          <h3 class="section-label">Watchlist — click symbol to navigate · {signal_count} signal(s) · {surge_count} surge(s) · {len(latest_event)} symbols with recent events</h3>
+          <h3 class="section-label">Watchlist — click symbol to navigate · {signal_count} signal(s) · {squeeze_count} squeeze(s) · {surge_count} surge(s) · {len(latest_event)} symbols with recent events</h3>
           <table class="overview-table">
             <thead>
-              <tr><th>Symbol</th><th>Price</th><th>Chg</th><th>Bull</th><th>Risk</th><th>OI&nbsp;3b</th><th>Vol&nbsp;3b</th><th>Funding</th><th>L/S</th><th>Signals</th><th>Last&nbsp;event</th></tr>
+              <tr><th>Symbol</th><th>Price</th><th>Chg</th><th>Bull</th><th>Risk</th><th title="Squeeze setup score — shorts atrapados">Sqz</th><th title="Whale accumulation score — manos fuertes acumulando">Whl</th><th>OI&nbsp;3b</th><th>Vol&nbsp;3b</th><th>Funding</th><th title="Prima del perpetuo (premium index)">Basis</th><th>L/S</th><th>Signals</th><th>Last&nbsp;event</th></tr>
             </thead>
             <tbody>{overview_rows_html}</tbody>
           </table>
@@ -662,7 +719,7 @@ def make_crypto_slide(
           <canvas id="vol-{canvas_id}"></canvas>
         </div>
         <div class="chart-box funding-box">
-          <div class="chart-label">Funding Rate (bps)</div>
+          <div class="chart-label">Funding (bars) · Basis (line) — bps</div>
           <canvas id="fr-{canvas_id}"></canvas>
         </div>
       </div>
@@ -813,6 +870,8 @@ html, body {
 .et-hot   { background: #2d1b00; color: #d29922; }
 .et-oi    { background: #1a2f4b; color: #79c0ff; }
 .et-vol   { background: #2a1a4b; color: #d2a8ff; }
+.et-squeeze { background: #3b1d2e; color: #f778ba; }
+.et-whale { background: #102a3d; color: #58a6ff; }
 .et-pre   { background: #1a1f29; color: #79c0ff; }
 
 /* ── Overview table ── */
@@ -825,6 +884,11 @@ html, body {
 .sig-entry { background: #0d2a1a; color: #3fb950; }
 .sig-oi    { background: #1a2f4b; color: #79c0ff; }
 .sig-vol   { background: #2a1a4b; color: #d2a8ff; }
+.sig-squeeze { background: #3b1d2e; color: #f778ba; }
+.sig-whale { background: #102a3d; color: #58a6ff; }
+.sig-pump  { background: #4b1113; color: #ff7b72; }
+.sig-ignition { background: #f85149; color: #0d1117; }
+.sig-spot  { background: #1f2a1a; color: #9ece6a; }
 .last-event-cell { white-space: nowrap; }
 .event-date { color: #6e7681; font-size: 10px; }
 .muted { color: #6e7681; }
@@ -1414,19 +1478,32 @@ STATIC_JS = r"""
     });
   }
 
-  // ── Funding rate bar chart (bps) on a time axis ──────────────────────────
-  function fundingChart(id, points, xMin, xMax) {
+  // ── Funding rate bars + basis (perp premium) line, both in bps ───────────
+  function fundingChart(id, points, xMin, xMax, basisPoints) {
     const canvas = document.getElementById(id);
     if (!canvas) return null;
     const colors = points.map(p => p.y >= 0 ? '#d29922cc' : '#f85149cc');
+    const datasets = [compactBarDataset(points, colors)];
+    if (basisPoints && basisPoints.length) {
+      datasets.push({
+        type: 'line',
+        data: basisPoints,
+        borderColor: '#79c0ff',
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.2,
+        order: 0,
+      });
+    }
     return new Chart(canvas.getContext('2d'), {
       type: 'bar',
-      data: { datasets: [compactBarDataset(points, colors)] },
+      data: { datasets },
       options: {
         responsive: true, maintainAspectRatio: false, animation: { duration: 200 },
         plugins: {
           legend: { display: false },
-          tooltip: { callbacks: { label: (i) => (+i.raw.y).toFixed(2) + ' bps' } },
+          tooltip: { callbacks: { label: (i) => (i.dataset.type === 'line' ? 'basis ' : 'funding ') + (+i.raw.y).toFixed(2) + ' bps' } },
         },
         scales: { x: timeScale(xMin, xMax, { showTicks: false }), y: barYScale({ symmetric: true }) },
       },
@@ -1496,9 +1573,14 @@ STATIC_JS = r"""
     const frPoints = raw
       .filter(d => Number.isFinite(+(d.funding_rate || 0)))
       .map(d => ({ x: Date.parse(d.timestamp), y: Math.round(+(d.funding_rate || 0) * 1e6) / 100 }));
+    const hasBasis = raw.some(d => d.basis_pct !== undefined && +d.basis_pct !== 0);
+    const basisPoints = hasBasis
+      ? raw.filter(d => Number.isFinite(+(d.basis_pct || 0)))
+           .map(d => ({ x: Date.parse(d.timestamp), y: Math.round(+(d.basis_pct || 0) * 1e6) / 100 }))
+      : [];
 
     const volChart = barChart   ('vol-' + id, volPoints, '#8b949e', xMin, xMax);
-    const frChart  = fundingChart('fr-' + id, frPoints, xMin, xMax);
+    const frChart  = fundingChart('fr-' + id, frPoints, xMin, xMax, basisPoints);
 
     // L/S ratio overlay on price chart
     const lsLongPts  = raw.filter(d => +d.ls_long  > 0).map(d => ({ x: Date.parse(d.timestamp), y: +d.ls_long  }));

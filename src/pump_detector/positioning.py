@@ -120,17 +120,137 @@ _BYBIT_PERIODS = {"1h": "1h", "4h": "4h", "1d": "1d"}
 _OKX_PERIODS = {"1h": "1H", "4h": "1H", "1d": "1D"}
 
 
-def _binance_ls_url_params(market, period: str, limit: int) -> tuple[str, dict]:
+def _binance_futures_data_url_params(market, endpoint: str, period: str, limit: int) -> tuple[str, dict]:
     period = _BINANCE_PERIODS.get(period, "4h")
     if market.quote == "USD":
         return (
-            "https://dapi.binance.com/futures/data/topLongShortAccountRatio",
+            f"https://dapi.binance.com/futures/data/{endpoint}",
             {"pair": f"{market.base}USD", "period": period, "limit": min(limit, 500)},
         )
     return (
-        "https://fapi.binance.com/futures/data/topLongShortAccountRatio",
+        f"https://fapi.binance.com/futures/data/{endpoint}",
         {"symbol": f"{market.base}USDT", "period": period, "limit": min(limit, 500)},
     )
+
+
+def _binance_ls_url_params(market, period: str, limit: int) -> tuple[str, dict]:
+    return _binance_futures_data_url_params(market, "topLongShortAccountRatio", period, limit)
+
+
+def _fetch_binance_ratio_history(market, endpoint: str, period: str, limit: int, http: requests.Session) -> list[dict]:
+    """Shared parser for Binance futures/data ratio endpoints (longAccount/shortAccount rows)."""
+    url, params = _binance_futures_data_url_params(market, endpoint, period, limit)
+    response = http.get(url, params=params, timeout=10)
+    if response.status_code != 200:
+        return []
+    payload = response.json()
+    if not isinstance(payload, list) or not payload:
+        return []
+    result = []
+    for row in payload:
+        long_pct = _to_float(row.get("longAccount"))
+        short_pct = _to_float(row.get("shortAccount"))
+        if long_pct > 0 or short_pct > 0:
+            result.append({
+                "timestamp_ms": int(_to_float(row.get("timestamp", 0))),
+                "long_pct": long_pct,
+                "short_pct": short_pct,
+            })
+    return result  # Binance returns oldest-first
+
+
+def fetch_top_position_ratio_history(
+    raw_symbol: str,
+    period: str = "4h",
+    limit: int = 120,
+    *,
+    session: requests.Session | None = None,
+) -> list[dict]:
+    """Top-trader long/short POSITION ratio (size-weighted = whale proxy).
+
+    Unlike the account ratio (one vote per account), this weighs by position
+    size, so it tracks what the big books are doing. Binance-only;
+    returns [] on any failure.
+    """
+    market = normalize_symbol(raw_symbol)
+    if not market.supported:
+        return []
+    try:
+        return _fetch_binance_ratio_history(
+            market, "topLongShortPositionRatio", period, limit, session or requests.Session()
+        )
+    except Exception:  # noqa: BLE001 - degrade silently
+        return []
+
+
+def fetch_taker_ratio_history(
+    raw_symbol: str,
+    period: str = "4h",
+    limit: int = 120,
+    *,
+    session: requests.Session | None = None,
+) -> list[dict]:
+    """Taker (aggressive) buy/sell volume ratio history from Binance USDM.
+
+    Returns [{timestamp_ms, buy_ratio}] oldest-first, where buy_ratio is the
+    taker-buy share of taker volume (0.5 = balanced). [] on any failure or
+    for COIN-M symbols (different payload shape, not worth a second parser).
+    """
+    market = normalize_symbol(raw_symbol)
+    if not market.supported or market.quote == "USD":
+        return []
+    http = session or requests.Session()
+    try:
+        response = http.get(
+            "https://fapi.binance.com/futures/data/takerlongshortRatio",
+            params={
+                "symbol": f"{market.base}USDT",
+                "period": _BINANCE_PERIODS.get(period, "4h"),
+                "limit": min(limit, 500),
+            },
+            timeout=10,
+        )
+        if response.status_code != 200:
+            return []
+        payload = response.json()
+        if not isinstance(payload, list):
+            return []
+        result = []
+        for row in payload:
+            buy_vol = _to_float(row.get("buyVol"))
+            sell_vol = _to_float(row.get("sellVol"))
+            total = buy_vol + sell_vol
+            if total <= 0:
+                continue
+            result.append({
+                "timestamp_ms": int(_to_float(row.get("timestamp", 0))),
+                "buy_ratio": buy_vol / total,
+            })
+        return result  # Binance returns oldest-first
+    except Exception:  # noqa: BLE001 - degrade silently
+        return []
+
+
+def fetch_global_long_short_history(
+    raw_symbol: str,
+    period: str = "4h",
+    limit: int = 120,
+    *,
+    session: requests.Session | None = None,
+) -> list[dict]:
+    """Global (all-accounts ≈ retail) long/short account ratio history.
+
+    Binance-only; returns [] on any failure.
+    """
+    market = normalize_symbol(raw_symbol)
+    if not market.supported:
+        return []
+    try:
+        return _fetch_binance_ratio_history(
+            market, "globalLongShortAccountRatio", period, limit, session or requests.Session()
+        )
+    except Exception:  # noqa: BLE001 - degrade silently
+        return []
 
 
 def _fetch_binance(market, period: str, http: requests.Session) -> LongShortRatio:
@@ -150,24 +270,7 @@ def _fetch_binance(market, period: str, http: requests.Session) -> LongShortRati
 
 
 def _fetch_binance_history(market, period: str, limit: int, http: requests.Session) -> list[dict]:
-    url, params = _binance_ls_url_params(market, period, limit)
-    response = http.get(url, params=params, timeout=10)
-    if response.status_code != 200:
-        return []
-    payload = response.json()
-    if not isinstance(payload, list) or not payload:
-        return []
-    result = []
-    for row in payload:
-        long_pct = _to_float(row.get("longAccount"))
-        short_pct = _to_float(row.get("shortAccount"))
-        if long_pct > 0 or short_pct > 0:
-            result.append({
-                "timestamp_ms": int(_to_float(row.get("timestamp", 0))),
-                "long_pct": long_pct,
-                "short_pct": short_pct,
-            })
-    return result  # Binance returns oldest-first
+    return _fetch_binance_ratio_history(market, "topLongShortAccountRatio", period, limit, http)
 
 
 def _fetch_bybit(market, period: str, http: requests.Session) -> LongShortRatio:
@@ -279,4 +382,11 @@ def _to_float(value: object) -> float:
         return 0.0
 
 
-__all__ = ["LongShortRatio", "fetch_long_short_ratio", "fetch_long_short_history"]
+__all__ = [
+    "LongShortRatio",
+    "fetch_long_short_ratio",
+    "fetch_long_short_history",
+    "fetch_top_position_ratio_history",
+    "fetch_global_long_short_history",
+    "fetch_taker_ratio_history",
+]

@@ -18,6 +18,7 @@ from .coinalyze import (
     CoinalyzeDiagnostic,
     coinalyze_symbol,
     fetch_coinalyze_liquidations,
+    fetch_coinalyze_liquidations_batch,
     fetch_coinalyze_liquidations_with_diagnostic,
     parse_coinalyze_liquidations,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "coinalyze_symbol",
     "empty_liquidations",
     "fetch_coinalyze_liquidations",
+    "fetch_coinalyze_liquidations_batch",
     "fetch_coinalyze_liquidations_with_diagnostic",
     "fetch_liquidation_map",
     "fetch_liquidation_report",

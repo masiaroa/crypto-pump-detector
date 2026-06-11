@@ -11,6 +11,7 @@ from pump_detector.liquidations import coinalyze as cz_mod
 from pump_detector.liquidations.coinalyze import (
     coinalyze_symbol,
     fetch_coinalyze_liquidations,
+    fetch_coinalyze_liquidations_batch,
     fetch_coinalyze_liquidations_with_diagnostic,
     parse_coinalyze_liquidations,
 )
@@ -325,3 +326,45 @@ def test_fetch_coinalyze_diagnostic_reports_empty_response(monkeypatch, tmp_path
     assert diagnostic.status == "empty"
     assert diagnostic.http_status == 200
     assert diagnostic.rows == 0
+
+
+def test_fetch_coinalyze_batch_groups_symbols_into_one_request(monkeypatch, tmp_path):
+    monkeypatch.setenv("COINALYZE_API_KEY", "k_test")
+    monkeypatch.setattr(cz_mod, "MARKETS_CACHE", tmp_path / "markets.json")
+    markets = [
+        {"symbol": "SANDUSDT_PERP.A", "exchange": "Binance", "base_asset": "SAND",
+         "quote_asset": "USDT", "is_perpetual": True},
+        {"symbol": "ARBUSDT_PERP.A", "exchange": "Binance", "base_asset": "ARB",
+         "quote_asset": "USDT", "is_perpetual": True},
+    ]
+    payload = [
+        {"symbol": "SANDUSDT_PERP.A", "history": [{"t": 1746000000, "l": 1000.0, "s": 2000.0}]},
+        {"symbol": "ARBUSDT_PERP.A", "history": [{"t": 1746000000, "l": 0.0, "s": 500.0}]},
+    ]
+    session = DummySession(
+        {
+            "/future-markets": (markets, 200),
+            "/liquidation-history": (payload, 200),
+        }
+    )
+
+    result = fetch_coinalyze_liquidations_batch(
+        ["BINANCE:SANDUSDT.P", "BINANCE:ARBUSDT.P"],
+        "4h",
+        cfg={"enabled": True},
+        session=session,
+        now_s=1746010000,
+    )
+
+    liq_calls = [c for c in session.calls if "/liquidation-history" in c["url"]]
+    assert len(liq_calls) == 1  # both symbols comma-joined into one request
+    assert set(liq_calls[0]["params"]["symbols"].split(",")) == {"SANDUSDT_PERP.A", "ARBUSDT_PERP.A"}
+    assert set(result) == {"BINANCE:SANDUSDT.P", "BINANCE:ARBUSDT.P"}
+    assert float(result["BINANCE:SANDUSDT.P"]["notional"].sum()) == 3000.0
+    short_rows = result["BINANCE:ARBUSDT.P"]
+    assert (short_rows["side"] == "short").all()
+
+
+def test_fetch_coinalyze_batch_without_key_returns_empty(monkeypatch):
+    monkeypatch.delenv("COINALYZE_API_KEY", raising=False)
+    assert fetch_coinalyze_liquidations_batch(["BINANCE:SANDUSDT.P"], "4h", cfg={"enabled": True}) == {}

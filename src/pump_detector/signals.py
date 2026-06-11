@@ -46,6 +46,33 @@ class SignalSnapshot:
     forward_return_5_candles: float | None = None
     max_favorable_excursion: float | None = None
     max_adverse_excursion: float | None = None
+    basis_pct: float = 0.0
+    basis_zscore: float = 0.0
+    basis_percentile_90d: float = 0.0
+    basis_classification: str = "UNKNOWN"
+    squeeze_setup_score: float = 0.0
+    squeeze_oi_points: float = 0.0
+    squeeze_setup_flag: bool = False
+    oi_added_on_down_share: float = 0.0
+    oi_price_divergence_flag: bool = False
+    bbw_percentile: float = 0.0
+    coiled_spring_flag: bool = False
+    stop_cluster_distance_pct: float = 0.0
+    stop_cluster_strength: float = 0.0
+    squeeze_ignition_flag: bool = False
+    short_liq_zscore: float = 0.0
+    taker_buy_ratio_zscore: float = 0.0
+    whale_accum_score: float = 0.0
+    whale_flow_points: float = 0.0
+    whale_accum_flag: bool = False
+    whale_pump_flag: bool = False
+    taker_buy_share: float = 0.0
+    cvd_slope: float = 0.0
+    top_position_long_pct: float = 0.0
+    global_long_ratio: float = 0.0
+    retail_top_divergence: float = 0.0
+    spot_perp_vol_ratio: float = 0.0
+    spot_led_flag: bool = False
 
     def to_dict(self) -> dict[str, object]:
         data = asdict(self)
@@ -67,6 +94,46 @@ def classify_funding(rate: float | None, recent: pd.Series | None = None, hot_th
     if rate <= hot_threshold:
         return "POSITIVE"
     return "HOT"
+
+
+def classify_basis(basis: float | None, recent: pd.Series | None = None, hot_threshold: float = 0.0008) -> str:
+    """Bucket the perp premium-index. Mirrors classify_funding's shape.
+
+    The premium index reacts candle by candle (funding only settles every
+    8h), so it is the leading read on long/short pressure: perp trading at
+    a discount = shorts leaning in, fat premium = longs crowded.
+    """
+    if basis is None or pd.isna(basis):
+        return "UNKNOWN"
+    if recent is not None and len(recent.dropna()) >= 20 and recent.dropna().nunique() >= 5:
+        percentile_95 = np.nanpercentile(recent.dropna(), 95)
+        if basis >= percentile_95 and basis > hot_threshold:
+            return "EXTREME"
+    if basis < -0.0002:
+        return "DISCOUNT"
+    if basis <= 0.0002:
+        return "FLAT"
+    if basis <= hot_threshold:
+        return "PREMIUM"
+    return "HOT"
+
+
+# Basis buckets map onto the funding buckets so the scoring functions can use
+# whichever positioning read is available without duplicating their tables.
+_BASIS_TO_FUNDING_CLASS = {
+    "DISCOUNT": "NEGATIVE",
+    "FLAT": "NEUTRAL",
+    "PREMIUM": "POSITIVE",
+    "HOT": "HOT",
+    "EXTREME": "EXTREME",
+    "UNKNOWN": "UNKNOWN",
+}
+
+
+def positioning_class(basis_class: str, funding_class: str) -> str:
+    """Positioning bucket for scoring: basis when known, funding as fallback."""
+    mapped = _BASIS_TO_FUNDING_CLASS.get(basis_class, "UNKNOWN")
+    return mapped if mapped != "UNKNOWN" else funding_class
 
 
 def compute_indicators(df: pd.DataFrame, lookback_stats: int = 100) -> pd.DataFrame:
@@ -96,6 +163,8 @@ def compute_indicators(df: pd.DataFrame, lookback_stats: int = 100) -> pd.DataFr
     out["price_return_zscore"] = _rolling_zscore(out["price_return_pct"], lookback_stats)
     out["oi_change_zscore"] = _rolling_zscore(out["oi_change_pct"], lookback_stats)
     out["volume_zscore"] = _rolling_zscore(out["volume"], lookback_stats)
+    if "basis_pct" in out.columns:
+        out["basis_zscore"] = _rolling_zscore(out["basis_pct"], lookback_stats)
     volume_median = out["volume"].shift(1).rolling(lookback_stats, min_periods=max(10, lookback_stats // 5)).median()
     out["volume_ratio"] = (out["volume"] / volume_median).replace([np.inf, -np.inf], np.nan).fillna(0.0)
     out["recent_price_run_pct"] = out["close"].pct_change(10)
@@ -149,12 +218,23 @@ def mark_signal_history(
         classify_funding(row.funding_rate, out["funding_rate"].iloc[max(0, idx - 270) : idx])
         for idx, row in out.iterrows()
     ]
+    if "basis_pct" in out.columns and out["basis_pct"].notna().any():
+        out["basis_classification"] = [
+            classify_basis(row.basis_pct, out["basis_pct"].iloc[max(0, idx - 270) : idx])
+            for idx, row in out.iterrows()
+        ]
+    else:
+        out["basis_classification"] = "UNKNOWN"
+    out["positioning_classification"] = [
+        positioning_class(row["basis_classification"], row["funding_classification"])
+        for _, row in out.iterrows()
+    ]
     out["early_bullish_score"] = [
-        round(_early_score(row, row["funding_classification"], bool(row["first_impulse_flag"])), 1)
+        round(_early_score(row, row["positioning_classification"], bool(row["first_impulse_flag"])), 1)
         for _, row in out.iterrows()
     ]
     out["blowoff_risk_score"] = [
-        round(_risk_score(row, row["funding_classification"]), 1)
+        round(_risk_score(row, row["positioning_classification"]), 1)
         for _, row in out.iterrows()
     ]
     explosive_confirmation = (
@@ -250,16 +330,21 @@ def evaluate_latest(
     funding_recent = df["funding_rate"].tail(270) if "funding_rate" in df else None
     funding_class = classify_funding(latest.get("funding_rate"), funding_recent)
     funding_percentile = _percentile_rank(funding_recent, latest.get("funding_rate"))
+    basis_recent = df["basis_pct"].tail(270) if "basis_pct" in df else None
+    basis_class = classify_basis(latest.get("basis_pct"), basis_recent)
+    basis_percentile = _percentile_rank(basis_recent, latest.get("basis_pct"))
+    pos_class = positioning_class(basis_class, funding_class)
     volume_ok = bool(latest["volume_zscore"] >= volume_zscore_threshold)
     optional_ok = (
         (not require_volume_confirmation or volume_ok)
         and (not require_breakout_20 or bool(latest["breakout_20_flag"]))
         and (not require_sma200_reclaim or bool(latest["sma200_reclaim_flag"]))
-        and funding_class in allowed_funding_classes
+        # Positioning gate: basis class (mapped) when available, funding otherwise.
+        and pos_class in allowed_funding_classes
     )
 
-    early_score = _early_score(latest, funding_class, first_impulse)
-    risk_score = _risk_score(latest, funding_class)
+    early_score = _early_score(latest, pos_class, first_impulse)
+    risk_score = _risk_score(latest, pos_class)
     signal_active = bool(price_impulse and oi_impulse and first_impulse)
     alert_triggered = bool(signal_active and optional_ok)
     oi_3bar_change_pct = _float(latest.get("oi_3bar_change_pct"))
@@ -267,11 +352,21 @@ def evaluate_latest(
     oi_surge_flag = bool(oi_3bar_change_pct >= oi_surge_3bar_pct)
     volume_surge_flag = bool(volume_3bar_ratio >= volume_surge_3bar_ratio)
     last_signal_time = latest["timestamp"].isoformat() if signal_active else ""
+    squeeze_setup_score = _float(latest.get("squeeze_setup_score"))
+    squeeze_setup_flag = bool(latest.get("squeeze_setup_flag", False))
+    whale_accum_score = _float(latest.get("whale_accum_score"))
+    whale_accum_flag = bool(latest.get("whale_accum_flag", False))
     reasons = _notes(price_impulse, oi_impulse, first_impulse, funding_class, latest, notes)
     if oi_surge_flag:
         reasons += f"; OI surge 3-bar {oi_3bar_change_pct*100:.1f}%"
     if volume_surge_flag:
         reasons += f"; volume surge 3-bar {volume_3bar_ratio:.1f}x"
+    if basis_class != "UNKNOWN":
+        reasons += f"; basis {basis_class}"
+    if squeeze_setup_flag:
+        reasons += f"; squeeze setup {squeeze_setup_score:.0f}"
+    if whale_accum_flag:
+        reasons += f"; whale accumulation {whale_accum_score:.0f}"
 
     return SignalSnapshot(
         symbol=symbol,
@@ -307,6 +402,24 @@ def evaluate_latest(
         alert_triggered=alert_triggered,
         last_signal_time=last_signal_time,
         notes=reasons,
+        basis_pct=_float(latest.get("basis_pct")),
+        basis_zscore=_float(latest.get("basis_zscore")),
+        basis_percentile_90d=basis_percentile,
+        basis_classification=basis_class,
+        squeeze_setup_score=squeeze_setup_score,
+        squeeze_oi_points=_float(latest.get("squeeze_oi_points")),
+        squeeze_setup_flag=squeeze_setup_flag,
+        oi_added_on_down_share=_float(latest.get("oi_added_on_down_share")),
+        oi_price_divergence_flag=bool(latest.get("oi_price_divergence_flag", False)),
+        bbw_percentile=_float(latest.get("bbw_percentile")),
+        coiled_spring_flag=bool(latest.get("coiled_spring_flag", False)),
+        stop_cluster_distance_pct=_float(latest.get("stop_cluster_distance_pct")),
+        stop_cluster_strength=_float(latest.get("stop_cluster_strength")),
+        whale_accum_score=whale_accum_score,
+        whale_flow_points=_float(latest.get("whale_flow_points")),
+        whale_accum_flag=whale_accum_flag,
+        taker_buy_share=_float(latest.get("taker_buy_share")),
+        cvd_slope=_float(latest.get("cvd_slope")),
     )
 
 
