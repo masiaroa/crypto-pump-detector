@@ -67,6 +67,7 @@ def _enrich_with_squeeze(df: pd.DataFrame, ls_map: dict, settings) -> pd.DataFra
             ls_history_falling(points),
             settings=cfg,
             funding_available=str(row.get("funding_classification", "UNKNOWN")) != "UNKNOWN",
+            basis_available=str(row.get("basis_classification", "UNKNOWN")) != "UNKNOWN",
         )
         scores.append(score)
         flags.append(flag)
@@ -94,7 +95,7 @@ def _export_charts(details: dict, charts_dir: Path, ls_map: dict | None = None) 
         "timestamp",
         "close", "open", "high", "low",
         "open_interest", "oi_open", "oi_high", "oi_low", "oi_close",
-        "volume", "funding_rate",
+        "volume", "funding_rate", "basis_pct",
         "squeeze_setup_score", "stop_cluster_level",
     ]
     for (raw_symbol, timeframe), df in details.items():

@@ -119,6 +119,7 @@ def latest_score_with_ls(
     ls_falling: bool,
     settings: dict | None = None,
     funding_available: bool = True,
+    basis_available: bool = False,
 ) -> tuple[float, bool]:
     """Fold the long/short crowding component into a candle-native score.
 
@@ -131,7 +132,7 @@ def latest_score_with_ls(
     weight_ls = float(cfg["weight_ls"])
     if long_ratio is None or long_ratio <= 0 or weight_ls <= 0:
         return candle_score, flag
-    available = _candle_available_weight(cfg, funding_available)
+    available = _candle_available_weight(cfg, funding_available, basis_available)
     if available <= 0:
         return candle_score, flag
     points = candle_score / 100.0 * available
@@ -147,10 +148,12 @@ def ls_history_falling(points: list[dict], window: int = 6) -> bool:
     return len(values) >= 3 and values[-1] < values[0]
 
 
-def _candle_available_weight(cfg: dict, funding_available: bool) -> float:
+def _candle_available_weight(cfg: dict, funding_available: bool, basis_available: bool = False) -> float:
     weight = float(cfg["weight_oi_build"]) + float(cfg["weight_stop_magnet"]) + float(cfg["weight_compression"])
     if funding_available:
         weight += float(cfg["weight_funding"])
+    if basis_available:
+        weight += float(cfg["weight_basis"])
     return weight
 
 
@@ -168,6 +171,7 @@ def _score_columns(
     weight_stop = float(cfg["weight_stop_magnet"])
     weight_comp = float(cfg["weight_compression"])
     weight_funding = float(cfg["weight_funding"])
+    weight_basis = float(cfg["weight_basis"])
     funding_low = float(cfg["funding_low_percentile"])
     cap = float(cfg["stop_cluster_max_distance_pct"])
     comp_pct = float(cfg["compression_percentile"])
@@ -185,6 +189,15 @@ def _score_columns(
         funding_known = pd.Series(False, index=out.index)
         points_funding = pd.Series(0.0, index=out.index)
 
+    if "basis_pct" in out.columns and "basis_zscore" in out.columns:
+        basis_known = out["basis_pct"].notna()
+        perp_discount = (out["basis_pct"] < 0).fillna(False)
+        depth_factor = np.clip(-out["basis_zscore"].fillna(0.0) / 2.0, 0.0, 1.0)
+        points_basis = weight_basis * perp_discount.astype(float) * depth_factor
+    else:
+        basis_known = pd.Series(False, index=out.index)
+        points_basis = pd.Series(0.0, index=out.index)
+
     strength_factor = np.clip(out["stop_cluster_strength"] / 3.0, 0.0, 1.0)
     distance = out["stop_cluster_distance_pct"]
     proximity_factor = np.clip((cap - distance.fillna(cap)) / cap, 0.0, 1.0)
@@ -193,8 +206,12 @@ def _score_columns(
     points_comp = weight_comp * np.clip((comp_pct - out["bbw_percentile"]) / comp_pct, 0.0, 1.0)
 
     base_weight = weight_oi + weight_stop + weight_comp
-    available = base_weight + weight_funding * funding_known.astype(float)
-    total_points = points_oi + points_funding + points_stop + points_comp
+    available = (
+        base_weight
+        + weight_funding * funding_known.astype(float)
+        + weight_basis * basis_known.astype(float)
+    )
+    total_points = points_oi + points_funding + points_basis + points_stop + points_comp
     score = (100.0 * total_points / available.replace(0, np.nan)).fillna(0.0)
 
     out["squeeze_oi_points"] = points_oi.round(1)

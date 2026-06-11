@@ -270,7 +270,21 @@ def funding_badge_class(fc: str) -> str:
         "POSITIVE": "badge-positive",
         "HOT":      "badge-hot",
         "EXTREME":  "badge-extreme",
+        # Basis (perp premium) buckets reuse the funding palette.
+        "DISCOUNT": "badge-negative",
+        "FLAT":     "badge-neutral",
+        "PREMIUM":  "badge-positive",
     }.get(str(fc), "badge-unknown")
+
+
+_BASIS_CLASSES = {"DISCOUNT", "FLAT", "PREMIUM", "HOT", "EXTREME"}
+
+
+def basis_badge_html(bc: str) -> str:
+    bc = str(bc)
+    if bc not in _BASIS_CLASSES:
+        return '<span class="muted">—</span>'
+    return f'<span class="badge {funding_badge_class(bc)}">{esc(bc)}</span>'
 
 
 def format_price(close: float) -> str:
@@ -466,6 +480,7 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
             "oi_3bar": safe_float(row.get("oi_3bar_change_pct", 0)),
             "vol_3bar": safe_float(row.get("volume_3bar_ratio", 0)),
             "funding": str(row.get("funding_classification", "UNKNOWN")),
+            "basis": str(row.get("basis_classification", "UNKNOWN")),
             "long_pct": safe_float(row.get("long_account_ratio", 0)),
             "short_pct": safe_float(row.get("short_account_ratio", 0)),
             "last_event_type": str(ev.get("event_type", "")),
@@ -531,6 +546,7 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
             <td style="color:{oi3_color}">{r["oi_3bar"]*100:+.1f}%</td>
             <td>{r["vol_3bar"]:.1f}x</td>
             <td><span class="badge {funding_badge_class(r["funding"])}">{esc(r["funding"])}</span></td>
+            <td>{basis_badge_html(r["basis"])}</td>
             <td style="color:{ls_color}">{esc(ls_label)}</td>
             <td class="sig-cell">{sig_chips}</td>
             <td class="last-event-cell">{last_event_cell}</td>
@@ -543,7 +559,7 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
           <h3 class="section-label">Watchlist — click symbol to navigate · {signal_count} signal(s) · {squeeze_count} squeeze(s) · {surge_count} surge(s) · {len(latest_event)} symbols with recent events</h3>
           <table class="overview-table">
             <thead>
-              <tr><th>Symbol</th><th>Price</th><th>Chg</th><th>Bull</th><th>Risk</th><th title="Squeeze setup score — shorts atrapados">Sqz</th><th>OI&nbsp;3b</th><th>Vol&nbsp;3b</th><th>Funding</th><th>L/S</th><th>Signals</th><th>Last&nbsp;event</th></tr>
+              <tr><th>Symbol</th><th>Price</th><th>Chg</th><th>Bull</th><th>Risk</th><th title="Squeeze setup score — shorts atrapados">Sqz</th><th>OI&nbsp;3b</th><th>Vol&nbsp;3b</th><th>Funding</th><th title="Prima del perpetuo (premium index)">Basis</th><th>L/S</th><th>Signals</th><th>Last&nbsp;event</th></tr>
             </thead>
             <tbody>{overview_rows_html}</tbody>
           </table>
@@ -674,7 +690,7 @@ def make_crypto_slide(
           <canvas id="vol-{canvas_id}"></canvas>
         </div>
         <div class="chart-box funding-box">
-          <div class="chart-label">Funding Rate (bps)</div>
+          <div class="chart-label">Funding (bars) · Basis (line) — bps</div>
           <canvas id="fr-{canvas_id}"></canvas>
         </div>
       </div>
@@ -1428,19 +1444,32 @@ STATIC_JS = r"""
     });
   }
 
-  // ── Funding rate bar chart (bps) on a time axis ──────────────────────────
-  function fundingChart(id, points, xMin, xMax) {
+  // ── Funding rate bars + basis (perp premium) line, both in bps ───────────
+  function fundingChart(id, points, xMin, xMax, basisPoints) {
     const canvas = document.getElementById(id);
     if (!canvas) return null;
     const colors = points.map(p => p.y >= 0 ? '#d29922cc' : '#f85149cc');
+    const datasets = [compactBarDataset(points, colors)];
+    if (basisPoints && basisPoints.length) {
+      datasets.push({
+        type: 'line',
+        data: basisPoints,
+        borderColor: '#79c0ff',
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.2,
+        order: 0,
+      });
+    }
     return new Chart(canvas.getContext('2d'), {
       type: 'bar',
-      data: { datasets: [compactBarDataset(points, colors)] },
+      data: { datasets },
       options: {
         responsive: true, maintainAspectRatio: false, animation: { duration: 200 },
         plugins: {
           legend: { display: false },
-          tooltip: { callbacks: { label: (i) => (+i.raw.y).toFixed(2) + ' bps' } },
+          tooltip: { callbacks: { label: (i) => (i.dataset.type === 'line' ? 'basis ' : 'funding ') + (+i.raw.y).toFixed(2) + ' bps' } },
         },
         scales: { x: timeScale(xMin, xMax, { showTicks: false }), y: barYScale({ symmetric: true }) },
       },
@@ -1510,9 +1539,14 @@ STATIC_JS = r"""
     const frPoints = raw
       .filter(d => Number.isFinite(+(d.funding_rate || 0)))
       .map(d => ({ x: Date.parse(d.timestamp), y: Math.round(+(d.funding_rate || 0) * 1e6) / 100 }));
+    const hasBasis = raw.some(d => d.basis_pct !== undefined && +d.basis_pct !== 0);
+    const basisPoints = hasBasis
+      ? raw.filter(d => Number.isFinite(+(d.basis_pct || 0)))
+           .map(d => ({ x: Date.parse(d.timestamp), y: Math.round(+(d.basis_pct || 0) * 1e6) / 100 }))
+      : [];
 
     const volChart = barChart   ('vol-' + id, volPoints, '#8b949e', xMin, xMax);
-    const frChart  = fundingChart('fr-' + id, frPoints, xMin, xMax);
+    const frChart  = fundingChart('fr-' + id, frPoints, xMin, xMax, basisPoints);
 
     // L/S ratio overlay on price chart
     const lsLongPts  = raw.filter(d => +d.ls_long  > 0).map(d => ({ x: Date.parse(d.timestamp), y: +d.ls_long  }));
