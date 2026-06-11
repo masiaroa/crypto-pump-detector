@@ -59,6 +59,17 @@ class SignalSnapshot:
     coiled_spring_flag: bool = False
     stop_cluster_distance_pct: float = 0.0
     stop_cluster_strength: float = 0.0
+    whale_accum_score: float = 0.0
+    whale_flow_points: float = 0.0
+    whale_accum_flag: bool = False
+    whale_pump_flag: bool = False
+    taker_buy_share: float = 0.0
+    cvd_slope: float = 0.0
+    top_position_long_pct: float = 0.0
+    global_long_ratio: float = 0.0
+    retail_top_divergence: float = 0.0
+    spot_perp_vol_ratio: float = 0.0
+    spot_led_flag: bool = False
 
     def to_dict(self) -> dict[str, object]:
         data = asdict(self)
@@ -340,6 +351,8 @@ def evaluate_latest(
     last_signal_time = latest["timestamp"].isoformat() if signal_active else ""
     squeeze_setup_score = _float(latest.get("squeeze_setup_score"))
     squeeze_setup_flag = bool(latest.get("squeeze_setup_flag", False))
+    whale_accum_score = _float(latest.get("whale_accum_score"))
+    whale_accum_flag = bool(latest.get("whale_accum_flag", False))
     reasons = _notes(price_impulse, oi_impulse, first_impulse, funding_class, latest, notes)
     if oi_surge_flag:
         reasons += f"; OI surge 3-bar {oi_3bar_change_pct*100:.1f}%"
@@ -349,6 +362,8 @@ def evaluate_latest(
         reasons += f"; basis {basis_class}"
     if squeeze_setup_flag:
         reasons += f"; squeeze setup {squeeze_setup_score:.0f}"
+    if whale_accum_flag:
+        reasons += f"; whale accumulation {whale_accum_score:.0f}"
 
     return SignalSnapshot(
         symbol=symbol,
@@ -397,6 +412,11 @@ def evaluate_latest(
         coiled_spring_flag=bool(latest.get("coiled_spring_flag", False)),
         stop_cluster_distance_pct=_float(latest.get("stop_cluster_distance_pct")),
         stop_cluster_strength=_float(latest.get("stop_cluster_strength")),
+        whale_accum_score=whale_accum_score,
+        whale_flow_points=_float(latest.get("whale_flow_points")),
+        whale_accum_flag=whale_accum_flag,
+        taker_buy_share=_float(latest.get("taker_buy_share")),
+        cvd_slope=_float(latest.get("cvd_slope")),
     )
 
 

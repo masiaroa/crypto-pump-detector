@@ -306,6 +306,8 @@ def _fetch_binance_usdt_m(market: MarketSymbol, timeframe: str, limit: int) -> p
         ],
     )
     ohlcv = _numeric_frame(ohlcv, ["open", "high", "low", "close", "volume"])
+    # Aggressive-buy volume per candle (same base unit as `volume`) — feeds CVD.
+    ohlcv["taker_buy_volume"] = pd.to_numeric(ohlcv["taker_base"], errors="coerce")
     ohlcv["timestamp"] = pd.to_datetime(ohlcv["timestamp"].astype("int64"), unit="ms", utc=True)
 
     oi_raw = _get_paginated_rows(
@@ -402,6 +404,8 @@ def _fetch_binance_coin_m(market: MarketSymbol, timeframe: str, limit: int) -> p
         ],
     )
     ohlcv = _numeric_frame(ohlcv, ["open", "high", "low", "close", "volume"])
+    # COIN-M volume is in contracts; taker_volume (idx 9) is the matching unit.
+    ohlcv["taker_buy_volume"] = pd.to_numeric(ohlcv["taker_volume"], errors="coerce")
     ohlcv["timestamp"] = pd.to_datetime(ohlcv["timestamp"].astype("int64"), unit="ms", utc=True)
 
     oi_raw = _get_paginated_rows(
@@ -499,6 +503,29 @@ def _merge_market_frames(
     merged["open_interest"] = merged["open_interest"].ffill()
     merged["funding_rate"] = merged["funding_rate"].ffill()
     return merged.reset_index(drop=True)
+
+
+def fetch_spot_volumes(raw_symbol: str, timeframe: str = "4h", limit: int = 60) -> pd.Series:
+    """Binance spot kline volumes (base asset) for the symbol's BASE/USDT pair.
+
+    Used for the spot-vs-perp volume leadership read; spot-led moves are
+    real buying rather than leverage. Returns an empty Series on any
+    failure (no spot listing, network, geo-block).
+    """
+    market = normalize_symbol(raw_symbol)
+    if not market.supported:
+        return pd.Series(dtype=float)
+    interval = {"1h": "1h", "4h": "4h", "1d": "1d"}.get(timeframe, "4h")
+    try:
+        rows = _get_json(
+            "https://api.binance.com/api/v3/klines",
+            {"symbol": f"{market.base}USDT", "interval": interval, "limit": min(limit, 1000)},
+        )
+        if not isinstance(rows, list) or not rows:
+            return pd.Series(dtype=float)
+        return pd.Series([float(row[5]) for row in rows], dtype=float)
+    except Exception:  # noqa: BLE001 - enhancement only, degrade silently
+        return pd.Series(dtype=float)
 
 
 def _numeric_frame(df: pd.DataFrame, columns: Iterable[str]) -> pd.DataFrame:

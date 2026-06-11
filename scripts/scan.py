@@ -5,9 +5,21 @@ from pathlib import Path
 
 import pandas as pd
 
+from pump_detector.accumulation import (
+    latest_whale_score,
+    ratio_history_rising,
+    spot_perp_volume_ratio,
+    whale_pump_ignition,
+)
 from pump_detector.config import ROOT, load_settings, load_watchlist
+from pump_detector.data_clients import fetch_spot_volumes
 from pump_detector.liquidations import fetch_liquidation_map
-from pump_detector.positioning import fetch_long_short_history, fetch_long_short_ratio
+from pump_detector.positioning import (
+    fetch_global_long_short_history,
+    fetch_long_short_history,
+    fetch_long_short_ratio,
+    fetch_top_position_ratio_history,
+)
 from pump_detector.scanner import scan_watchlist
 from pump_detector.squeeze import latest_score_with_ls, ls_history_falling
 
@@ -76,6 +88,89 @@ def _enrich_with_squeeze(df: pd.DataFrame, ls_map: dict, settings) -> pd.DataFra
     return df
 
 
+def _fetch_whale_inputs(details: dict) -> tuple[dict, dict, dict]:
+    """Per-symbol whale-score inputs, one fetch per unique symbol (4h only).
+
+    Returns (top_position_map, global_ls_map, spot_ratio_map). All sources
+    degrade to empty on failure — the whale score renormalises around
+    whatever is available.
+    """
+    symbols = sorted({raw_symbol for raw_symbol, _ in details})
+    top_map: dict[str, list[dict]] = {}
+    global_map: dict[str, list[dict]] = {}
+    spot_map: dict[str, float] = {}
+    for raw_symbol in symbols:
+        top_map[raw_symbol] = fetch_top_position_ratio_history(raw_symbol, period="4h")
+        global_map[raw_symbol] = fetch_global_long_short_history(raw_symbol, period="4h")
+        perp_frame = details.get((raw_symbol, "4h"))
+        if perp_frame is not None and not perp_frame.empty and "volume" in perp_frame.columns:
+            spot_volumes = fetch_spot_volumes(raw_symbol, timeframe="4h", limit=60)
+            spot_map[raw_symbol] = spot_perp_volume_ratio(spot_volumes, perp_frame["volume"])
+        else:
+            spot_map[raw_symbol] = 0.0
+    return top_map, global_map, spot_map
+
+
+def _enrich_with_whale(
+    df: pd.DataFrame,
+    details: dict,
+    top_map: dict,
+    global_map: dict,
+    spot_map: dict,
+    settings,
+) -> pd.DataFrame:
+    """Fold positioning + spot components into the latest whale score, and
+    evaluate the retail-FOMO ignition (whale_pump_flag) for the newest candle."""
+    if df.empty or "whale_accum_score" not in df.columns:
+        return df
+    cfg = dict(settings.accumulation or {})
+    if not cfg.get("enabled", True):
+        return df
+    df = df.copy()
+    scores, accum_flags, pump_flags = [], [], []
+    top_longs, global_longs, divergences, spot_ratios, spot_leds = [], [], [], [], []
+    spot_led_min = float(cfg.get("spot_led_ratio_min", 1.0))
+    for _, row in df.iterrows():
+        symbol = str(row.get("symbol"))
+        timeframe = str(row.get("timeframe"))
+        top_points = (top_map or {}).get(symbol, [])
+        global_points = (global_map or {}).get(symbol, [])
+        top_long = top_points[-1]["long_pct"] if top_points else 0.0
+        global_long = global_points[-1]["long_pct"] if global_points else 0.0
+        spot_ratio = float((spot_map or {}).get(symbol, 0.0))
+        score, accum_flag = latest_whale_score(
+            float(row.get("whale_accum_score") or 0.0),
+            float(row.get("whale_flow_points") or 0.0),
+            top_position_long=top_long,
+            top_position_rising=ratio_history_rising(top_points),
+            global_long_ratio=global_long,
+            spot_perp_vol_ratio=spot_ratio,
+            settings=cfg,
+            cvd_available=float(row.get("taker_buy_share") or 0.0) > 0,
+        )
+        history = details.get((symbol, timeframe))
+        pump_flag = False
+        if history is not None and "whale_accum_score" in history.columns:
+            pump_flag = whale_pump_ignition(history["whale_accum_score"], row, global_points, settings=cfg)
+        scores.append(score)
+        accum_flags.append(accum_flag)
+        pump_flags.append(pump_flag)
+        top_longs.append(top_long)
+        global_longs.append(global_long)
+        divergences.append(round(float(row.get("long_account_ratio") or 0.0) - global_long, 4) if global_long > 0 else 0.0)
+        spot_ratios.append(spot_ratio)
+        spot_leds.append(spot_ratio >= spot_led_min)
+    df["whale_accum_score"] = scores
+    df["whale_accum_flag"] = accum_flags
+    df["whale_pump_flag"] = pump_flags
+    df["top_position_long_pct"] = top_longs
+    df["global_long_ratio"] = global_longs
+    df["retail_top_divergence"] = divergences
+    df["spot_perp_vol_ratio"] = spot_ratios
+    df["spot_led_flag"] = spot_leds
+    return df
+
+
 def _fetch_ls_history_map(details: dict) -> dict[tuple, list[dict]]:
     """Return {(symbol, timeframe): [{timestamp_ms, long_pct, short_pct}, ...]}."""
     cache: dict[tuple[str, str], list[dict]] = {}
@@ -97,6 +192,7 @@ def _export_charts(details: dict, charts_dir: Path, ls_map: dict | None = None) 
         "open_interest", "oi_open", "oi_high", "oi_low", "oi_close",
         "volume", "funding_rate", "basis_pct",
         "squeeze_setup_score", "stop_cluster_level",
+        "whale_accum_score", "cvd_slope",
     ]
     for (raw_symbol, timeframe), df in details.items():
         available = [c for c in cols if c in df.columns]
@@ -170,7 +266,8 @@ def _export_event_history(details: dict, history_path: Path) -> None:
         oi_surge_col = "oi_surge_flag"
         vol_surge_col = "volume_surge_flag"
         squeeze_col = "squeeze_setup_flag"
-        relevant_cols = [sig_col, pre_col, oi_surge_col, vol_surge_col, squeeze_col]
+        whale_col = "whale_accum_flag"
+        relevant_cols = [sig_col, pre_col, oi_surge_col, vol_surge_col, squeeze_col, whale_col]
         if not any(c in hist.columns for c in relevant_cols):
             continue
         mask = pd.Series(False, index=hist.index)
@@ -189,10 +286,13 @@ def _export_event_history(details: dict, history_path: Path) -> None:
             is_oi_surge = bool(row.get(oi_surge_col, False))
             is_vol_surge = bool(row.get(vol_surge_col, False))
             is_squeeze = bool(row.get(squeeze_col, False))
+            is_whale = bool(row.get(whale_col, False))
             if is_signal:
                 et = "ENTRY"
             elif is_squeeze:
                 et = "SQUEEZE_SETUP"
+            elif is_whale:
+                et = "WHALE_ACCUM"
             elif is_oi_surge:
                 et = "OI_SURGE"
             elif is_vol_surge:
@@ -216,6 +316,7 @@ def _export_event_history(details: dict, history_path: Path) -> None:
                 "early_bullish_score": row.get("early_bullish_score", 0.0),
                 "blowoff_risk_score": row.get("blowoff_risk_score", 0.0),
                 "squeeze_setup_score": row.get("squeeze_setup_score", 0.0),
+                "whale_accum_score": row.get("whale_accum_score", 0.0),
             })
     if not rows:
         return
@@ -251,6 +352,15 @@ if __name__ == "__main__":
     df = _enrich_with_squeeze(df, ls_map, settings)
     squeeze_count = int(df["squeeze_setup_flag"].sum()) if "squeeze_setup_flag" in df.columns else 0
     log(f"[scan] squeeze setups: {squeeze_count}")
+
+    # Whale accumulation: top-trader position ratio, retail ratio and spot
+    # volume leadership (one fetch per symbol, 4h granularity).
+    log(f"[scan] fetching whale inputs (position/retail/spot) …")
+    top_map, global_map, spot_map = _fetch_whale_inputs(details)
+    df = _enrich_with_whale(df, details, top_map, global_map, spot_map, settings)
+    whale_count = int(df["whale_accum_flag"].sum()) if "whale_accum_flag" in df.columns else 0
+    pump_count = int(df["whale_pump_flag"].sum()) if "whale_pump_flag" in df.columns else 0
+    log(f"[scan] whale accumulations: {whale_count} · whale pumps: {pump_count}")
 
     # Latest scan CSV
     latest_csv = ROOT / "data" / "latest_scan.csv"

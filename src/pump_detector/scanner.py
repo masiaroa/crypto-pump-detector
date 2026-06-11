@@ -6,6 +6,7 @@ import pandas as pd
 
 from .config import ROOT, Settings, load_settings, load_watchlist
 from .data_clients import DataUnavailable, fetch_market_data
+from .accumulation import compute_accumulation_columns
 from .signals import SignalSnapshot, compute_indicators, evaluate_latest, mark_signal_history
 from .squeeze import compute_squeeze_columns
 from .storage import append_snapshots
@@ -63,6 +64,8 @@ def scan_watchlist(
                 )
                 if bool((settings.squeeze or {}).get("enabled", True)):
                     marked = compute_squeeze_columns(marked, settings=settings.squeeze)
+                if bool((settings.accumulation or {}).get("enabled", True)):
+                    marked = compute_accumulation_columns(marked, settings=settings.accumulation)
                 snapshot = evaluate_latest(
                     marked,
                     timeframe=timeframe,

@@ -30,6 +30,7 @@ class Settings:
     liquidations: dict[str, Any] = field(default_factory=dict)
     coinalyze_dashboard: dict[str, Any] = field(default_factory=dict)
     squeeze: dict[str, Any] = field(default_factory=dict)
+    accumulation: dict[str, Any] = field(default_factory=dict)
 
 
 DEFAULT_SETTINGS = {
@@ -95,6 +96,25 @@ DEFAULT_SETTINGS = {
         "weight_funding": 15,
         "weight_ls": 10,
     },
+    "accumulation": {
+        "enabled": True,
+        "lookback": 20,
+        "cvd_full_share": 0.12,
+        "price_quiet_max_pct": 0.05,
+        "accum_score_min": 55,
+        "accum_min_flow_points": 15,
+        "retail_long_max": 0.55,
+        "spot_full_ratio": 2.0,
+        "spot_led_ratio_min": 1.0,
+        "ignition_lookback": 6,
+        "ignition_min_prior_score": 45,
+        "ignition_volume_zscore": 2.0,
+        "weight_cvd": 30,
+        "weight_oi_price": 20,
+        "weight_top_position": 15,
+        "weight_spot": 20,
+        "weight_retail_out": 15,
+    },
 }
 
 
@@ -113,7 +133,7 @@ def load_settings(path: Path | None = None) -> Settings:
     ensure_default_files()
     raw = read_yaml(path or CONFIG_DIR / "settings.yaml")
     merged = DEFAULT_SETTINGS | (raw or {})
-    for key in ("alert_conditions", "thresholds", "storage", "liquidations", "coinalyze_dashboard", "squeeze"):
+    for key in ("alert_conditions", "thresholds", "storage", "liquidations", "coinalyze_dashboard", "squeeze", "accumulation"):
         merged[key] = dict(DEFAULT_SETTINGS.get(key, {})) | dict((raw or {}).get(key, {}) or {})
 
     # Allow env-var override: SCAN_TIMEFRAME=1d or SCAN_TIMEFRAME=4h,1d
@@ -136,6 +156,7 @@ def load_settings(path: Path | None = None) -> Settings:
         liquidations=dict(merged["liquidations"]),
         coinalyze_dashboard=dict(merged["coinalyze_dashboard"]),
         squeeze=dict(merged["squeeze"]),
+        accumulation=dict(merged["accumulation"]),
     )
 
 

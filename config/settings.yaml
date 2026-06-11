@@ -60,6 +60,26 @@ squeeze:
   weight_funding: 15
   weight_ls: 10
 
+accumulation:
+  enabled: true
+  lookback: 20                 # velas para medir CVD y build de OI
+  cvd_full_share: 0.12         # desequilibrio comprador (share del volumen) para puntos maximos
+  price_quiet_max_pct: 0.05    # acumulacion = el precio aun no ha corrido mas de esto
+  accum_score_min: 55          # score minimo para whale_accum_flag
+  accum_min_flow_points: 15    # ...y CVD+OI deben aportar al menos esto
+  retail_long_max: 0.55        # retail (ratio global) por debajo = la masa aun no ha entrado
+  spot_full_ratio: 2.0         # ratio volumen spot/perp para puntos maximos
+  spot_led_ratio_min: 1.0      # ratio minimo para marcar SPOT-LED
+  ignition_lookback: 6         # velas previas con acumulacion para validar ignicion
+  ignition_min_prior_score: 45
+  ignition_volume_zscore: 2.0  # vela verde con este zscore de volumen = retail entrando
+  # Pesos por componente del score de ballenas.
+  weight_cvd: 30
+  weight_oi_price: 20
+  weight_top_position: 15
+  weight_spot: 20
+  weight_retail_out: 15
+
 coinalyze_dashboard:
   enabled: true
   timeframes:
