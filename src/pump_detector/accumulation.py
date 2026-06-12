@@ -63,12 +63,14 @@ def compute_accumulation_columns(df: pd.DataFrame, settings: dict | None = None)
         volume = out["volume"].replace(0, np.nan)
         out["taker_buy_share"] = (taker / volume).clip(0.0, 1.0)
         cvd_delta = 2.0 * taker - out["volume"]
+        out["cvd"] = cvd_delta.fillna(0.0).cumsum()
         out["cvd_slope"] = (
             cvd_delta.rolling(n, min_periods=5).sum() / out["volume"].rolling(n, min_periods=5).sum()
         ).replace([np.inf, -np.inf], np.nan)
         cvd_known = out["cvd_slope"].notna()
     else:
         out["taker_buy_share"] = np.nan
+        out["cvd"] = np.nan
         out["cvd_slope"] = np.nan
         cvd_known = pd.Series(False, index=out.index)
 
@@ -109,6 +111,7 @@ def latest_whale_score(
     spot_perp_vol_ratio: float,
     settings: dict | None = None,
     cvd_available: bool = False,
+    spot_cvd_rising: bool | None = None,
 ) -> tuple[float, bool]:
     """Fold positioning + spot-leadership components into a candle-native score."""
     cfg = _cfg(settings)
@@ -125,7 +128,11 @@ def latest_whale_score(
 
     weight_spot = float(cfg["weight_spot"])
     if spot_perp_vol_ratio > 0:
-        points += weight_spot * np.clip((spot_perp_vol_ratio - 0.5) / (float(cfg["spot_full_ratio"]) - 0.5), 0.0, 1.0)
+        spot_factor = np.clip((spot_perp_vol_ratio - 0.5) / (float(cfg["spot_full_ratio"]) - 0.5), 0.0, 1.0)
+        # Spot CVD falling = spot volume is selling pressure, not accumulation.
+        if spot_cvd_rising is False:
+            spot_factor *= 0.5
+        points += weight_spot * spot_factor
         available += weight_spot
 
     weight_retail = float(cfg["weight_retail_out"])
@@ -164,6 +171,58 @@ def whale_pump_ignition(
     return bool(green and volume_surge and retail_turning_up(retail_history))
 
 
+def whale_pump_ignition_series(
+    df: pd.DataFrame,
+    retail_points: list[dict],
+    settings: dict | None = None,
+) -> pd.Series:
+    """Per-candle retail-FOMO ignition flags over a marked indicator frame.
+
+    Same logic as ``whale_pump_ignition`` but evaluated at every candle
+    close (no lookahead) so the event history can reconstruct past pumps.
+    """
+    cfg = _cfg(settings)
+    if df.empty or "whale_accum_score" not in df.columns:
+        return pd.Series(False, index=df.index)
+    zeros = pd.Series(0.0, index=df.index)
+    prior_max = (
+        df["whale_accum_score"].shift(1).rolling(int(cfg["ignition_lookback"]), min_periods=1).max()
+    )
+    setup_ok = (prior_max >= float(cfg["ignition_min_prior_score"])).fillna(False)
+    green = (df.get("price_return_pct", zeros).fillna(0.0) > 0) & df.get(
+        "close_near_high", pd.Series(False, index=df.index)
+    ).fillna(False).astype(bool)
+    volume_surge = df.get("volume_zscore", zeros).fillna(0.0) >= float(cfg["ignition_volume_zscore"])
+    retail_up = _retail_turning_up_series(retail_points, df["timestamp"])
+    return (setup_ok & green & volume_surge & retail_up).fillna(False)
+
+
+def _retail_turning_up_series(points: list[dict], candle_timestamps: pd.Series, window: int = 6) -> pd.Series:
+    """``retail_turning_up`` evaluated at every candle (ratio mapped onto candles)."""
+    index = candle_timestamps.index
+    pairs = [
+        (int(p["timestamp_ms"]), float(p["long_pct"]))
+        for p in points
+        if p.get("long_pct", 0.0) > 0 and p.get("timestamp_ms") is not None
+    ]
+    if len(pairs) < 3:
+        return pd.Series(False, index=index)
+    pairs.sort()
+    point_ts = np.array([ts for ts, _ in pairs], dtype="int64")
+    point_values = np.array([v for _, v in pairs], dtype=float)
+    candle_ms = pd.to_datetime(candle_timestamps).dt.as_unit("ms").astype("int64").to_numpy()
+    positions = np.searchsorted(point_ts, candle_ms, side="right") - 1
+    mapped = pd.Series(
+        np.where(positions >= 0, point_values[np.clip(positions, 0, None)], np.nan), index=index
+    )
+
+    def _turning_up(values: np.ndarray) -> float:
+        valid = values[~np.isnan(values)]
+        return float(len(valid) >= 3 and valid[-1] > valid.min())
+
+    return mapped.rolling(window, min_periods=3).apply(_turning_up, raw=True).fillna(0.0).astype(bool)
+
+
 def retail_turning_up(points: list[dict], window: int = 6) -> bool:
     """True when the retail (global account) long% just turned upward."""
     values = [p.get("long_pct", 0.0) for p in points[-window:] if p.get("long_pct", 0.0) > 0]
@@ -173,6 +232,23 @@ def retail_turning_up(points: list[dict], window: int = 6) -> bool:
 def ratio_history_rising(points: list[dict], window: int = 6) -> bool:
     values = [p.get("long_pct", 0.0) for p in points[-window:] if p.get("long_pct", 0.0) > 0]
     return len(values) >= 3 and values[-1] > values[0]
+
+
+def spot_cvd_rising(spot_flows: pd.DataFrame | None, window: int = 20) -> bool | None:
+    """Whether the spot cumulative volume delta is rising over the window.
+
+    ``spot_flows`` needs ``volume`` and ``taker_buy_volume`` columns (see
+    data_clients.fetch_spot_flows). None = unknown (no data) — the spot
+    component then scores on volume ratio alone.
+    """
+    if spot_flows is None or spot_flows.empty or "taker_buy_volume" not in spot_flows.columns:
+        return None
+    taker = pd.to_numeric(spot_flows["taker_buy_volume"], errors="coerce").tail(window)
+    volume = pd.to_numeric(spot_flows["volume"], errors="coerce").tail(window)
+    total = float(volume.sum())
+    if total <= 0:
+        return None
+    return float((2.0 * taker - volume).sum()) > 0
 
 
 def spot_perp_volume_ratio(spot_volumes: pd.Series | None, perp_volumes: pd.Series, window: int = 30) -> float:
@@ -193,6 +269,7 @@ def spot_perp_volume_ratio(spot_volumes: pd.Series | None, perp_volumes: pd.Seri
 def _blank_columns(out: pd.DataFrame) -> pd.DataFrame:
     for column, default in (
         ("taker_buy_share", np.nan),
+        ("cvd", np.nan),
         ("cvd_slope", np.nan),
         ("whale_flow_points", 0.0),
         ("whale_accum_score", 0.0),
@@ -207,7 +284,9 @@ __all__ = [
     "compute_accumulation_columns",
     "latest_whale_score",
     "whale_pump_ignition",
+    "whale_pump_ignition_series",
     "retail_turning_up",
     "ratio_history_rising",
+    "spot_cvd_rising",
     "spot_perp_volume_ratio",
 ]

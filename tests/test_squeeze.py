@@ -7,8 +7,11 @@ from pump_detector.squeeze import (
     latest_score_with_ls,
     ls_history_falling,
     short_liq_zscore,
+    short_liq_zscore_series,
     squeeze_ignition,
+    squeeze_ignition_series,
     taker_ratio_zscore,
+    taker_ratio_zscores_for_candles,
 )
 
 
@@ -159,6 +162,61 @@ def test_taker_ratio_zscore():
     spike = quiet + [{"timestamp_ms": 41, "buy_ratio": 0.72}]
     assert taker_ratio_zscore(spike) >= 2.0
     assert taker_ratio_zscore(quiet[:5]) == 0.0
+
+
+def test_squeeze_ignition_series_marks_historical_ignition():
+    """A setup 3 candles back + green impulse candle with short covering →
+    the per-candle series flags that candle, mirroring the scalar logic."""
+    n = 30
+    ts = pd.date_range("2026-01-01", periods=n, freq="4h", tz="UTC")
+    df = pd.DataFrame(
+        {
+            "timestamp": ts,
+            "squeeze_setup_score": [10.0] * 20 + [55.0, 50.0, 20.0, 12.0, 30.0, 8.0, 5.0, 5.0, 5.0, 5.0],
+            "price_return_pct": [0.0] * 23 + [0.035] + [0.0] * 6,
+            "close_near_high": [False] * 23 + [True] + [False] * 6,
+            "price_return_zscore": [0.0] * 23 + [2.0] + [0.0] * 6,
+            "oi_change_pct": [0.01] * 23 + [-0.03] + [0.01] * 6,
+        }
+    )
+    flags, liq_z, taker_z = squeeze_ignition_series(df)
+    assert bool(flags.iloc[23]) is True            # short covering trigger
+    assert flags.sum() == 1                        # nothing else fires
+    assert len(liq_z) == n and len(taker_z) == n
+
+    # Without any prior setup the same candle does not ignite.
+    quiet = df.copy()
+    quiet["squeeze_setup_score"] = 10.0
+    flags_quiet, _, _ = squeeze_ignition_series(quiet)
+    assert not flags_quiet.any()
+
+
+def test_short_liq_zscore_series_spikes_on_burst_candle():
+    ts = pd.Series(pd.date_range("2026-01-01", periods=60, freq="4h", tz="UTC"))
+    rows = [
+        {"timestamp": ts.iloc[i], "side": "short", "notional": 10_000.0 + (i % 7) * 1_000}
+        for i in range(59)
+    ]
+    rows.append({"timestamp": ts.iloc[59], "side": "short", "notional": 500_000.0})
+    series = short_liq_zscore_series(pd.DataFrame(rows), ts)
+    assert series.iloc[-1] >= 2.0
+    assert series.iloc[30] < 2.0
+    assert short_liq_zscore_series(None, ts).eq(0.0).all()
+
+
+def test_taker_ratio_zscores_for_candles_maps_spike_to_latest():
+    ts = pd.Series(pd.date_range("2026-01-01", periods=50, freq="4h", tz="UTC"))
+    base_ms = int(ts.iloc[0].value // 1_000_000)
+    step = 4 * 3600 * 1000
+    points = [
+        {"timestamp_ms": base_ms + i * step, "buy_ratio": 0.50 + (i % 5) * 0.01}
+        for i in range(49)
+    ]
+    points.append({"timestamp_ms": base_ms + 49 * step, "buy_ratio": 0.72})
+    series = taker_ratio_zscores_for_candles(points, ts)
+    assert series.iloc[-1] >= 2.0
+    assert series.iloc[20] < 2.0
+    assert taker_ratio_zscores_for_candles([], ts).eq(0.0).all()
 
 
 def test_blank_columns_when_no_open_interest():

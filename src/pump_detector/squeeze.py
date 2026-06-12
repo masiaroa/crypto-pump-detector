@@ -182,6 +182,104 @@ def squeeze_ignition(
     return bool(green and impulse and trigger)
 
 
+def squeeze_ignition_series(
+    df: pd.DataFrame,
+    liq_frame: pd.DataFrame | None = None,
+    taker_points: list[dict] | None = None,
+    settings: dict | None = None,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Per-candle squeeze-ignition flags over a marked indicator frame.
+
+    Same logic as ``squeeze_ignition`` but evaluated at every candle close
+    (no lookahead) so the event history can reconstruct past ignitions.
+    Returns (flags, short_liq_z, taker_z) aligned to ``df``.
+    """
+    cfg = _cfg(settings)
+    zeros = pd.Series(0.0, index=df.index)
+    if df.empty or "squeeze_setup_score" not in df.columns:
+        return pd.Series(False, index=df.index), zeros, zeros.copy()
+
+    prior_max = (
+        df["squeeze_setup_score"].shift(1).rolling(int(cfg["ignition_lookback"]), min_periods=1).max()
+    )
+    setup_ok = (prior_max >= float(cfg["ignition_min_prior_score"])).fillna(False)
+
+    price_return = df.get("price_return_pct", zeros).fillna(0.0)
+    green = (price_return > 0) & df.get("close_near_high", pd.Series(False, index=df.index)).fillna(False).astype(bool)
+    impulse = df.get("price_return_zscore", zeros).fillna(0.0) >= float(cfg["ignition_price_zscore"])
+
+    liq_z = short_liq_zscore_series(liq_frame, df["timestamp"])
+    taker_z = taker_ratio_zscores_for_candles(taker_points or [], df["timestamp"])
+    short_covering = (price_return >= float(cfg["ignition_short_covering_return"])) & (
+        df.get("oi_change_pct", zeros).fillna(0.0) < 0
+    )
+    trigger = (
+        (liq_z >= float(cfg["ignition_short_liq_zscore"]))
+        | short_covering
+        | (taker_z >= float(cfg["ignition_taker_zscore"]))
+    )
+    flags = (setup_ok & green & impulse & trigger).fillna(False)
+    return flags, liq_z, taker_z
+
+
+def short_liq_zscore_series(
+    liq_frame: pd.DataFrame | None, candle_timestamps: pd.Series, lookback: int = 50
+) -> pd.Series:
+    """Per-candle z-score of short-liquidation notional vs the prior candles."""
+    index = candle_timestamps.index
+    sums = _bucket_short_liqs(liq_frame, candle_timestamps)
+    if sums is None:
+        return pd.Series(0.0, index=index)
+    return _rolling_last_zscore(sums, lookback).set_axis(index)
+
+
+def taker_ratio_zscores_for_candles(
+    points: list[dict], candle_timestamps: pd.Series, lookback: int = 50
+) -> pd.Series:
+    """Z-score of the taker buy-ratio history mapped onto each candle close."""
+    index = candle_timestamps.index
+    pairs = [
+        (int(p["timestamp_ms"]), float(p["buy_ratio"]))
+        for p in points
+        if p.get("buy_ratio", 0.0) > 0 and p.get("timestamp_ms") is not None
+    ]
+    if len(pairs) < 10:
+        return pd.Series(0.0, index=index)
+    pairs.sort()
+    point_ts = np.array([ts for ts, _ in pairs], dtype="int64")
+    z = _rolling_last_zscore(pd.Series([v for _, v in pairs]), lookback)
+    candle_ms = pd.to_datetime(candle_timestamps).dt.as_unit("ms").astype("int64").to_numpy()
+    positions = np.searchsorted(point_ts, candle_ms, side="right") - 1
+    values = np.where(positions >= 0, z.to_numpy()[np.clip(positions, 0, None)], 0.0)
+    return pd.Series(values, index=index)
+
+
+def _bucket_short_liqs(liq_frame: pd.DataFrame | None, candle_timestamps: pd.Series) -> pd.Series | None:
+    if liq_frame is None or liq_frame.empty or "side" not in liq_frame.columns:
+        return None
+    shorts = liq_frame[liq_frame["side"].astype(str).str.lower() == "short"]
+    if shorts.empty or candle_timestamps.empty:
+        return None
+    ts = pd.to_datetime(candle_timestamps).reset_index(drop=True)
+    positions = ts.searchsorted(pd.to_datetime(shorts["timestamp"]), side="right") - 1
+    sums = pd.Series(0.0, index=range(len(ts)))
+    grouped = pd.Series(shorts["notional"].to_numpy(), index=positions)
+    grouped = grouped[grouped.index >= 0].groupby(level=0).sum()
+    sums.update(grouped)
+    return sums
+
+
+def _rolling_last_zscore(values: pd.Series, lookback: int) -> pd.Series:
+    """Rolling version of ``_last_value_zscore`` evaluated at every position."""
+    mean = values.shift(1).rolling(lookback, min_periods=9).mean()
+    std = values.shift(1).rolling(lookback, min_periods=9).std(ddof=0)
+    z = (values - mean) / std
+    # Flat history (e.g. zero liquidations for weeks): any positive jump is a spike.
+    flat = (std <= 0) & mean.notna()
+    z = z.where(~flat, pd.Series(np.where(values > mean, 5.0, 0.0), index=values.index))
+    return z.replace([np.inf, -np.inf], 0.0).fillna(0.0).round(2)
+
+
 def short_liq_zscore(liq_frame: pd.DataFrame | None, candle_timestamps: pd.Series, lookback: int = 50) -> float:
     """Z-score of the newest candle's short-liquidation notional vs history.
 
@@ -388,6 +486,9 @@ __all__ = [
     "latest_score_with_ls",
     "ls_history_falling",
     "squeeze_ignition",
+    "squeeze_ignition_series",
     "short_liq_zscore",
+    "short_liq_zscore_series",
     "taker_ratio_zscore",
+    "taker_ratio_zscores_for_candles",
 ]

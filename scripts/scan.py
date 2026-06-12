@@ -8,11 +8,12 @@ import pandas as pd
 from pump_detector.accumulation import (
     latest_whale_score,
     ratio_history_rising,
+    spot_cvd_rising,
     spot_perp_volume_ratio,
-    whale_pump_ignition,
+    whale_pump_ignition_series,
 )
 from pump_detector.config import ROOT, load_settings, load_watchlist
-from pump_detector.data_clients import fetch_spot_volumes
+from pump_detector.data_clients import fetch_spot_flows
 from pump_detector.liquidations import fetch_coinalyze_liquidations_batch, fetch_liquidation_map
 from pump_detector.positioning import (
     fetch_global_long_short_history,
@@ -25,9 +26,7 @@ from pump_detector.scanner import scan_watchlist
 from pump_detector.squeeze import (
     latest_score_with_ls,
     ls_history_falling,
-    short_liq_zscore,
-    squeeze_ignition,
-    taker_ratio_zscore,
+    squeeze_ignition_series,
 )
 
 
@@ -95,27 +94,30 @@ def _enrich_with_squeeze(df: pd.DataFrame, ls_map: dict, settings) -> pd.DataFra
     return df
 
 
-def _fetch_whale_inputs(details: dict) -> tuple[dict, dict, dict]:
+def _fetch_whale_inputs(details: dict) -> tuple[dict, dict, dict, dict]:
     """Per-symbol whale-score inputs, one fetch per unique symbol (4h only).
 
-    Returns (top_position_map, global_ls_map, spot_ratio_map). All sources
-    degrade to empty on failure — the whale score renormalises around
-    whatever is available.
+    Returns (top_position_map, global_ls_map, spot_ratio_map, spot_cvd_map).
+    All sources degrade to empty on failure — the whale score renormalises
+    around whatever is available.
     """
     symbols = sorted({raw_symbol for raw_symbol, _ in details})
     top_map: dict[str, list[dict]] = {}
     global_map: dict[str, list[dict]] = {}
     spot_map: dict[str, float] = {}
+    spot_cvd_map: dict[str, bool | None] = {}
     for raw_symbol in symbols:
         top_map[raw_symbol] = fetch_top_position_ratio_history(raw_symbol, period="4h")
         global_map[raw_symbol] = fetch_global_long_short_history(raw_symbol, period="4h")
         perp_frame = details.get((raw_symbol, "4h"))
+        spot_map[raw_symbol] = 0.0
+        spot_cvd_map[raw_symbol] = None
         if perp_frame is not None and not perp_frame.empty and "volume" in perp_frame.columns:
-            spot_volumes = fetch_spot_volumes(raw_symbol, timeframe="4h", limit=60)
-            spot_map[raw_symbol] = spot_perp_volume_ratio(spot_volumes, perp_frame["volume"])
-        else:
-            spot_map[raw_symbol] = 0.0
-    return top_map, global_map, spot_map
+            spot_flows = fetch_spot_flows(raw_symbol, timeframe="4h", limit=60)
+            if not spot_flows.empty:
+                spot_map[raw_symbol] = spot_perp_volume_ratio(spot_flows["volume"], perp_frame["volume"])
+                spot_cvd_map[raw_symbol] = spot_cvd_rising(spot_flows)
+    return top_map, global_map, spot_map, spot_cvd_map
 
 
 def _enrich_with_whale(
@@ -124,10 +126,15 @@ def _enrich_with_whale(
     top_map: dict,
     global_map: dict,
     spot_map: dict,
+    spot_cvd_map: dict,
     settings,
 ) -> pd.DataFrame:
     """Fold positioning + spot components into the latest whale score, and
-    evaluate the retail-FOMO ignition (whale_pump_flag) for the newest candle."""
+    evaluate the retail-FOMO ignition (whale_pump_flag) per candle.
+
+    The per-candle ignition series is written back into the ``details``
+    frames so the event history can emit WHALE_PUMP events.
+    """
     if df.empty or "whale_accum_score" not in df.columns:
         return df
     cfg = dict(settings.accumulation or {})
@@ -154,11 +161,14 @@ def _enrich_with_whale(
             spot_perp_vol_ratio=spot_ratio,
             settings=cfg,
             cvd_available=float(row.get("taker_buy_share") or 0.0) > 0,
+            spot_cvd_rising=(spot_cvd_map or {}).get(symbol),
         )
         history = details.get((symbol, timeframe))
         pump_flag = False
         if history is not None and "whale_accum_score" in history.columns:
-            pump_flag = whale_pump_ignition(history["whale_accum_score"], row, global_points, settings=cfg)
+            pump_series = whale_pump_ignition_series(history, global_points, settings=cfg)
+            history["whale_pump_flag"] = pump_series
+            pump_flag = bool(pump_series.iloc[-1]) if len(pump_series) else False
         scores.append(score)
         accum_flags.append(accum_flag)
         pump_flags.append(pump_flag)
@@ -199,7 +209,7 @@ def _export_charts(details: dict, charts_dir: Path, ls_map: dict | None = None) 
         "open_interest", "oi_open", "oi_high", "oi_low", "oi_close",
         "volume", "funding_rate", "basis_pct",
         "squeeze_setup_score", "stop_cluster_level",
-        "whale_accum_score", "cvd_slope",
+        "whale_accum_score", "cvd", "cvd_slope",
     ]
     for (raw_symbol, timeframe), df in details.items():
         available = [c for c in cols if c in df.columns]
@@ -305,12 +315,23 @@ def _enrich_with_squeeze_ignition(
         timeframe = str(row.get("timeframe"))
         history = details.get((symbol, timeframe))
         liq_z = 0.0
-        taker_z = taker_ratio_zscore((taker_map or {}).get(symbol, []))
+        taker_z = 0.0
         flag = False
         if history is not None and "squeeze_setup_score" in history.columns:
             liq_frame = (liquidation_details or {}).get((symbol, timeframe))
-            liq_z = short_liq_zscore(liq_frame, history["timestamp"])
-            flag = squeeze_ignition(history["squeeze_setup_score"], row, liq_z, taker_z, settings=cfg)
+            flag_series, liq_series, taker_series = squeeze_ignition_series(
+                history,
+                liq_frame,
+                (taker_map or {}).get(symbol, []),
+                settings=cfg,
+            )
+            # Written back per candle so the event history can emit
+            # SQUEEZE_IGNITION events.
+            history["squeeze_ignition_flag"] = flag_series
+            if len(flag_series):
+                flag = bool(flag_series.iloc[-1])
+                liq_z = float(liq_series.iloc[-1])
+                taker_z = float(taker_series.iloc[-1])
         flags.append(flag)
         liq_zs.append(liq_z)
         taker_zs.append(taker_z)
@@ -332,7 +353,9 @@ def _export_event_history(details: dict, history_path: Path) -> None:
         vol_surge_col = "volume_surge_flag"
         squeeze_col = "squeeze_setup_flag"
         whale_col = "whale_accum_flag"
-        relevant_cols = [sig_col, pre_col, oi_surge_col, vol_surge_col, squeeze_col, whale_col]
+        ignition_col = "squeeze_ignition_flag"
+        pump_col = "whale_pump_flag"
+        relevant_cols = [sig_col, pre_col, oi_surge_col, vol_surge_col, squeeze_col, whale_col, ignition_col, pump_col]
         if not any(c in hist.columns for c in relevant_cols):
             continue
         mask = pd.Series(False, index=hist.index)
@@ -352,8 +375,14 @@ def _export_event_history(details: dict, history_path: Path) -> None:
             is_vol_surge = bool(row.get(vol_surge_col, False))
             is_squeeze = bool(row.get(squeeze_col, False))
             is_whale = bool(row.get(whale_col, False))
+            is_ignition = bool(row.get(ignition_col, False))
+            is_pump = bool(row.get(pump_col, False))
             if is_signal:
                 et = "ENTRY"
+            elif is_ignition:
+                et = "SQUEEZE_IGNITION"
+            elif is_pump:
+                et = "WHALE_PUMP"
             elif is_squeeze:
                 et = "SQUEEZE_SETUP"
             elif is_whale:
@@ -421,8 +450,8 @@ if __name__ == "__main__":
     # Whale accumulation: top-trader position ratio, retail ratio and spot
     # volume leadership (one fetch per symbol, 4h granularity).
     log(f"[scan] fetching whale inputs (position/retail/spot) …")
-    top_map, global_map, spot_map = _fetch_whale_inputs(details)
-    df = _enrich_with_whale(df, details, top_map, global_map, spot_map, settings)
+    top_map, global_map, spot_map, spot_cvd_map = _fetch_whale_inputs(details)
+    df = _enrich_with_whale(df, details, top_map, global_map, spot_map, spot_cvd_map, settings)
     whale_count = int(df["whale_accum_flag"].sum()) if "whale_accum_flag" in df.columns else 0
     pump_count = int(df["whale_pump_flag"].sum()) if "whale_pump_flag" in df.columns else 0
     log(f"[scan] whale accumulations: {whale_count} · whale pumps: {pump_count}")

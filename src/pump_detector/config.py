@@ -29,6 +29,7 @@ class Settings:
     storage: dict[str, Any]
     liquidations: dict[str, Any] = field(default_factory=dict)
     coinalyze_dashboard: dict[str, Any] = field(default_factory=dict)
+    basis: dict[str, Any] = field(default_factory=dict)
     squeeze: dict[str, Any] = field(default_factory=dict)
     accumulation: dict[str, Any] = field(default_factory=dict)
 
@@ -76,6 +77,13 @@ DEFAULT_SETTINGS = {
         "cache_dir": "data/coinalyze",
         "max_age_hours": 6,
         "core_exchanges": ["BINANCE", "BYBIT", "OKX"],
+    },
+    "basis": {
+        # Perp premium index vs spot — the primary positioning signal
+        # (funding stays as fallback when no basis data exists).
+        "enabled": True,
+        "hot_threshold": 0.0008,
+        "history_limit": 200,
     },
     "squeeze": {
         "enabled": True,
@@ -133,7 +141,7 @@ def load_settings(path: Path | None = None) -> Settings:
     ensure_default_files()
     raw = read_yaml(path or CONFIG_DIR / "settings.yaml")
     merged = DEFAULT_SETTINGS | (raw or {})
-    for key in ("alert_conditions", "thresholds", "storage", "liquidations", "coinalyze_dashboard", "squeeze", "accumulation"):
+    for key in ("alert_conditions", "thresholds", "storage", "liquidations", "coinalyze_dashboard", "basis", "squeeze", "accumulation"):
         merged[key] = dict(DEFAULT_SETTINGS.get(key, {})) | dict((raw or {}).get(key, {}) or {})
 
     # Allow env-var override: SCAN_TIMEFRAME=1d or SCAN_TIMEFRAME=4h,1d
@@ -155,6 +163,7 @@ def load_settings(path: Path | None = None) -> Settings:
         storage=dict(merged["storage"]),
         liquidations=dict(merged["liquidations"]),
         coinalyze_dashboard=dict(merged["coinalyze_dashboard"]),
+        basis=dict(merged["basis"]),
         squeeze=dict(merged["squeeze"]),
         accumulation=dict(merged["accumulation"]),
     )

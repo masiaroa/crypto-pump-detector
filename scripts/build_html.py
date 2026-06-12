@@ -353,6 +353,10 @@ def row_from_event(event: dict) -> dict:
         "alert_triggered": event.get("event_type") in {"ENTRY", "HOT_PRE_ENTRY"},
         "squeeze_setup_score": event.get("squeeze_setup_score", 0),
         "squeeze_setup_flag": event.get("event_type") == "SQUEEZE_SETUP",
+        "squeeze_ignition_flag": event.get("event_type") == "SQUEEZE_IGNITION",
+        "whale_accum_score": event.get("whale_accum_score", 0),
+        "whale_accum_flag": event.get("event_type") == "WHALE_ACCUM",
+        "whale_pump_flag": event.get("event_type") == "WHALE_PUMP",
     }
 
 
@@ -555,7 +559,9 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
                 "OI_SURGE": "et-oi",
                 "VOLUME_SURGE": "et-vol",
                 "SQUEEZE_SETUP": "et-squeeze",
+                "SQUEEZE_IGNITION": "et-ignition",
                 "WHALE_ACCUM": "et-whale",
+                "WHALE_PUMP": "et-pump",
             }.get(et, "et-pre")
             last_event_cell = (
                 f'<span class="event-type-badge {et_cls}">{esc(et)}</span>'
@@ -673,9 +679,8 @@ def make_crypto_slide(
         for tf, v in liqs_by_tf.items()
     )
 
-    # On mobile we duplicate the TF toggle as an overlay on the price chart.
-    # Navigation back to the overview uses the single floating button
-    # (#back-to-overview); the existing click handler syncs all .tf-btn copies.
+    # On mobile we duplicate the TF toggle as an overlay on the price chart;
+    # the existing click handler syncs all .tf-btn copies within a slide.
     tf_overlay_html = tf_toggle_html.replace('class="tf-toggle"', 'class="tf-toggle tf-toggle-overlay"', 1)
     zoom_reset_html = '<button class="zoom-reset" title="Reset zoom" aria-label="Reset zoom">&#8596;</button>'
     zoom_reset_overlay_html = '<button class="zoom-reset zoom-reset-overlay" title="Reset zoom" aria-label="Reset zoom">&#8596;</button>'
@@ -684,6 +689,7 @@ def make_crypto_slide(
     <section class="slide" id="slide-{idx}" data-idx="{idx}" data-symbol="{esc(symbol)}" data-default-tf="{esc(default_tf)}" {liq_data_attrs}>
       <div class="slide-header crypto-header">
         <div class="crypto-title">
+          <button class="back-btn" data-goto="0" title="Back to overview">&#8592;<span class="back-label">&nbsp;Overview</span></button>
           <span class="crypto-icon">{icon}</span>
           <span class="crypto-base">{esc(base)}</span>
           <span class="crypto-exchange">{esc(exchange)}</span>
@@ -788,6 +794,12 @@ html, body {
 
 .crypto-header { gap: 6px; }
 .crypto-title { display: flex; align-items: center; gap: 8px; }
+.back-btn {
+  background: #21262d; color: #58a6ff; border: 1px solid #30363d;
+  padding: 3px 8px; font-size: 11px; font-weight: 700; border-radius: 6px;
+  cursor: pointer; transition: all 0.15s;
+}
+.back-btn:hover { background: #30363d; color: #79c0ff; border-color: #58a6ff; }
 .ls-chip { font-size: 11px; }
 .crypto-icon { font-size: 14px; }
 .crypto-base { font-size: 20px; font-weight: 800; letter-spacing: -0.5px; }
@@ -871,7 +883,9 @@ html, body {
 .et-oi    { background: #1a2f4b; color: #79c0ff; }
 .et-vol   { background: #2a1a4b; color: #d2a8ff; }
 .et-squeeze { background: #3b1d2e; color: #f778ba; }
+.et-ignition { background: #f85149; color: #0d1117; }
 .et-whale { background: #102a3d; color: #58a6ff; }
+.et-pump  { background: #4b1113; color: #ff7b72; }
 .et-pre   { background: #1a1f29; color: #79c0ff; }
 
 /* ── Overview table ── */
@@ -972,20 +986,8 @@ html, body {
   opacity: 1; transition: opacity 2s;
 }
 
-/* ── Mobile-only floating UI (hidden on desktop) ── */
+/* ── Mobile-only overlay UI (hidden on desktop) ── */
 .tf-toggle-overlay { display: none; }
-#back-to-overview {
-  display: none;
-  position: fixed;
-  right: 14px; bottom: 14px;
-  z-index: 1000;
-  background: #21262d; color: #58a6ff; border: 1px solid #30363d;
-  padding: 7px 12px; font-size: 12px; font-weight: 700;
-  border-radius: 999px; cursor: pointer;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.35);
-}
-#back-to-overview:hover { background: #30363d; color: #79c0ff; border-color: #58a6ff; }
-body.show-back-btn #back-to-overview { display: inline-flex; align-items: center; }
 
 /* ── Mobile: price pinned on top, one indicator at a time below ── */
 @media (max-width: 480px) {
@@ -1018,9 +1020,12 @@ body.show-back-btn #back-to-overview { display: inline-flex; align-items: center
   .ind-btn.active { color: #58a6ff; border-color: #58a6ff; background: #1a2f4b; }
 
   /* Header on mobile: no inline TF toggle / zoom button — those move to a
-     chart overlay to free up space. */
+     chart overlay to free up space. The Overview button stays but shrinks
+     to an arrow-only chip. */
   .crypto-header > .crypto-meta  > .tf-toggle,
   .crypto-header > .crypto-meta  > .zoom-reset { display: none; }
+  .back-btn { padding: 2px 7px; font-size: 12px; }
+  .back-btn .back-label { display: none; }
 
   .slide-header.crypto-header {
     flex-wrap: nowrap;
@@ -1093,7 +1098,6 @@ STATIC_JS = r"""
     current = idx;
     dots.forEach((d, i) => d.classList.toggle('active', i === idx));
     counter.textContent = (idx + 1) + ' / ' + N;
-    document.body.classList.toggle('show-back-btn', idx > 0);
   }
 
   document.addEventListener('keydown', (e) => {
@@ -1527,16 +1531,36 @@ STATIC_JS = r"""
     return scale;
   }
 
-  function barChart(id, points, color, xMin, xMax) {
+  function barChart(id, points, color, xMin, xMax, overlayPoints) {
     const canvas = document.getElementById(id);
     if (!canvas) return null;
+    const datasets = [compactBarDataset(points, color + 'cc')];
+    const scales = { x: timeScale(xMin, xMax, { showTicks: false }), y: barYScale() };
+    if (overlayPoints && overlayPoints.length) {
+      // CVD line on its own (hidden) axis — shape matters, not the scale.
+      datasets.push({
+        type: 'line',
+        data: overlayPoints,
+        borderColor: '#79c0ff',
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.2,
+        order: 0,
+        yAxisID: 'y2',
+      });
+      scales.y2 = { display: false, position: 'left' };
+    }
     return new Chart(canvas.getContext('2d'), {
       type: 'bar',
-      data: { datasets: [compactBarDataset(points, color + 'cc')] },
+      data: { datasets },
       options: {
         responsive: true, maintainAspectRatio: false, animation: { duration: 200 },
-        plugins: { legend: { display: false } },
-        scales: { x: timeScale(xMin, xMax, { showTicks: false }), y: barYScale() },
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: (i) => (i.dataset.type === 'line' ? 'CVD ' : 'vol ') + (+i.raw.y).toLocaleString('en', { maximumFractionDigits: 0 }) } },
+        },
+        scales,
       },
     });
   }
@@ -1642,7 +1666,17 @@ STATIC_JS = r"""
            .map(d => ({ x: Date.parse(d.timestamp), y: Math.round(+(d.basis_pct || 0) * 1e6) / 100 }))
       : [];
 
-    const volChart = barChart   ('vol-' + id, volPoints, '#8b949e', xMin, xMax);
+    // CVD (cumulative taker-buy delta) overlay on the volume pane — only
+    // symbols served by Binance klines carry taker volume.
+    const hasCvd = raw.some(d => d.cvd !== undefined && +d.cvd !== 0);
+    const cvdPoints = hasCvd
+      ? raw.filter(d => Number.isFinite(+(d.cvd || 0)))
+           .map(d => ({ x: Date.parse(d.timestamp), y: +d.cvd }))
+      : [];
+    const volLabel = slideEl.querySelector('[data-ind="vol"] .chart-label');
+    if (volLabel) volLabel.textContent = cvdPoints.length ? 'Volume (bars) · CVD (line)' : 'Volume';
+
+    const volChart = barChart   ('vol-' + id, volPoints, '#8b949e', xMin, xMax, cvdPoints);
     const frChart  = fundingChart('fr-' + id, frPoints, xMin, xMax, basisPoints);
 
     // L/S ratio overlay on price chart
@@ -1771,7 +1805,6 @@ def build_html(
   <div id="nav-dots">{dots_html}</div>
   <div id="slide-counter">1 / {n}</div>
   <div id="swipe-hint">↑ swipe / arrow keys ↓</div>
-  <button id="back-to-overview" data-goto="0" title="Back to overview" aria-label="Back to overview">&#8592; Overview</button>
 
   <div id="slides">
 {slides_html}

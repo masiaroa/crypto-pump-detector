@@ -22,7 +22,12 @@ class MarketData:
     notes: str = ""
 
 
-def fetch_market_data(raw_symbol: str, timeframe: str, limit: int = 260) -> MarketData:
+def fetch_market_data(
+    raw_symbol: str,
+    timeframe: str,
+    limit: int = 260,
+    basis_cfg: dict | None = None,
+) -> MarketData:
     market = normalize_symbol(raw_symbol)
     if not market.supported:
         raise DataUnavailable(f"{raw_symbol} is not a supported perpetual market")
@@ -32,9 +37,9 @@ def fetch_market_data(raw_symbol: str, timeframe: str, limit: int = 260) -> Mark
     for provider in candidates:
         try:
             if provider == "BYBIT":
-                df = _fetch_bybit(market, timeframe, limit)
+                df = _fetch_bybit(market, timeframe, limit, basis_cfg=basis_cfg)
             elif provider == "BINANCE":
-                df = _fetch_binance(market, timeframe, limit)
+                df = _fetch_binance(market, timeframe, limit, basis_cfg=basis_cfg)
             elif provider == "BITGET":
                 df = _fetch_bitget(market, timeframe, limit)
             else:
@@ -208,7 +213,7 @@ def _fetch_binance_premium_index(symbol: str, timeframe: str, limit: int, coin_m
     return _basis_frame_from_klines(rows)
 
 
-def _fetch_bybit(market: MarketSymbol, timeframe: str, limit: int) -> pd.DataFrame:
+def _fetch_bybit(market: MarketSymbol, timeframe: str, limit: int, basis_cfg: dict | None = None) -> pd.DataFrame:
     interval = {"1h": "60", "4h": "240", "1d": "D"}[timeframe]
     oi_interval = {"1h": "1h", "4h": "4h", "1d": "1d"}[timeframe]
     symbol = _usdt_symbol(market)
@@ -264,18 +269,18 @@ def _fetch_bybit(market: MarketSymbol, timeframe: str, limit: int) -> pd.DataFra
         funding["funding_rate"] = pd.to_numeric(funding["fundingRate"], errors="coerce")
         funding = funding[["timestamp", "funding_rate"]].sort_values("timestamp")
 
-    basis = _safe_basis(_fetch_bybit_premium_index, symbol, timeframe, limit)
+    basis = _safe_basis(_fetch_bybit_premium_index, symbol, timeframe, limit, basis_cfg=basis_cfg)
 
     return _merge_market_frames(ohlcv, oi, funding, basis)
 
 
-def _fetch_binance(market: MarketSymbol, timeframe: str, limit: int) -> pd.DataFrame:
+def _fetch_binance(market: MarketSymbol, timeframe: str, limit: int, basis_cfg: dict | None = None) -> pd.DataFrame:
     if market.quote == "USD":
-        return _fetch_binance_coin_m(market, timeframe, limit)
-    return _fetch_binance_usdt_m(market, timeframe, limit)
+        return _fetch_binance_coin_m(market, timeframe, limit, basis_cfg=basis_cfg)
+    return _fetch_binance_usdt_m(market, timeframe, limit, basis_cfg=basis_cfg)
 
 
-def _fetch_binance_usdt_m(market: MarketSymbol, timeframe: str, limit: int) -> pd.DataFrame:
+def _fetch_binance_usdt_m(market: MarketSymbol, timeframe: str, limit: int, basis_cfg: dict | None = None) -> pd.DataFrame:
     interval = {"1h": "1h", "4h": "4h", "1d": "1d"}[timeframe]
     symbol = _usdt_symbol(market)
     base = "https://fapi.binance.com"
@@ -342,7 +347,7 @@ def _fetch_binance_usdt_m(market: MarketSymbol, timeframe: str, limit: int) -> p
         funding["funding_rate"] = pd.to_numeric(funding["fundingRate"], errors="coerce")
         funding = funding[["timestamp", "funding_rate"]]
 
-    basis = _safe_basis(_fetch_binance_premium_index, symbol, timeframe, limit)
+    basis = _safe_basis(_fetch_binance_premium_index, symbol, timeframe, limit, basis_cfg=basis_cfg)
 
     return _merge_market_frames(ohlcv.sort_values("timestamp"), oi.sort_values("timestamp"), funding.sort_values("timestamp"), basis)
 
@@ -372,7 +377,7 @@ def _fetch_binance_coin_m_daily_oi_ohlc(pair: str, limit: int) -> pd.DataFrame:
     )
 
 
-def _fetch_binance_coin_m(market: MarketSymbol, timeframe: str, limit: int) -> pd.DataFrame:
+def _fetch_binance_coin_m(market: MarketSymbol, timeframe: str, limit: int, basis_cfg: dict | None = None) -> pd.DataFrame:
     interval = {"1h": "1h", "4h": "4h", "1d": "1d"}[timeframe]
     symbol = f"{market.base}USD_PERP"
     pair = f"{market.base}USD"
@@ -440,7 +445,7 @@ def _fetch_binance_coin_m(market: MarketSymbol, timeframe: str, limit: int) -> p
         funding["funding_rate"] = pd.to_numeric(funding["fundingRate"], errors="coerce")
     funding = funding[["timestamp", "funding_rate"]]
 
-    basis = _safe_basis(_fetch_binance_premium_index, symbol, timeframe, limit, coin_m=True)
+    basis = _safe_basis(_fetch_binance_premium_index, symbol, timeframe, limit, basis_cfg=basis_cfg, coin_m=True)
 
     merged = _merge_market_frames(ohlcv.sort_values("timestamp"), oi.sort_values("timestamp"), funding.sort_values("timestamp"), basis)
     if timeframe == "1d":
@@ -481,8 +486,19 @@ def _fetch_bitget(market: MarketSymbol, timeframe: str, limit: int) -> pd.DataFr
     raise DataUnavailable("Bitget public client has no reliable historical OI endpoint in this MVP")
 
 
-def _safe_basis(fetcher: Callable[..., pd.DataFrame], symbol: str, timeframe: str, limit: int, **kwargs) -> pd.DataFrame:
+def _safe_basis(
+    fetcher: Callable[..., pd.DataFrame],
+    symbol: str,
+    timeframe: str,
+    limit: int,
+    basis_cfg: dict | None = None,
+    **kwargs,
+) -> pd.DataFrame:
     """Premium-index history is an enhancement — never let it kill a symbol."""
+    cfg = basis_cfg or {}
+    if not cfg.get("enabled", True):
+        return pd.DataFrame()
+    limit = min(limit, int(cfg.get("history_limit", _BASIS_HISTORY_LIMIT)))
     try:
         return fetcher(symbol, timeframe, limit, **kwargs)
     except Exception:  # noqa: BLE001 - degrade to no-basis, same as empty funding
@@ -505,16 +521,16 @@ def _merge_market_frames(
     return merged.reset_index(drop=True)
 
 
-def fetch_spot_volumes(raw_symbol: str, timeframe: str = "4h", limit: int = 60) -> pd.Series:
-    """Binance spot kline volumes (base asset) for the symbol's BASE/USDT pair.
+def fetch_spot_flows(raw_symbol: str, timeframe: str = "4h", limit: int = 60) -> pd.DataFrame:
+    """Binance spot kline volume + taker-buy volume for the BASE/USDT pair.
 
-    Used for the spot-vs-perp volume leadership read; spot-led moves are
-    real buying rather than leverage. Returns an empty Series on any
-    failure (no spot listing, network, geo-block).
+    Used for the spot-vs-perp volume leadership read and the spot CVD
+    (spot-led, aggressive real buying — not leverage). Returns an empty
+    DataFrame on any failure (no spot listing, network, geo-block).
     """
     market = normalize_symbol(raw_symbol)
     if not market.supported:
-        return pd.Series(dtype=float)
+        return pd.DataFrame()
     interval = {"1h": "1h", "4h": "4h", "1d": "1d"}.get(timeframe, "4h")
     try:
         rows = _get_json(
@@ -522,10 +538,23 @@ def fetch_spot_volumes(raw_symbol: str, timeframe: str = "4h", limit: int = 60) 
             {"symbol": f"{market.base}USDT", "interval": interval, "limit": min(limit, 1000)},
         )
         if not isinstance(rows, list) or not rows:
-            return pd.Series(dtype=float)
-        return pd.Series([float(row[5]) for row in rows], dtype=float)
+            return pd.DataFrame()
+        return pd.DataFrame(
+            {
+                "volume": [float(row[5]) for row in rows],
+                "taker_buy_volume": [float(row[9]) for row in rows],
+            }
+        )
     except Exception:  # noqa: BLE001 - enhancement only, degrade silently
+        return pd.DataFrame()
+
+
+def fetch_spot_volumes(raw_symbol: str, timeframe: str = "4h", limit: int = 60) -> pd.Series:
+    """Back-compat wrapper: spot volumes only (see fetch_spot_flows)."""
+    flows = fetch_spot_flows(raw_symbol, timeframe, limit)
+    if flows.empty:
         return pd.Series(dtype=float)
+    return flows["volume"].astype(float)
 
 
 def _numeric_frame(df: pd.DataFrame, columns: Iterable[str]) -> pd.DataFrame:

@@ -48,7 +48,12 @@ def scan_watchlist(
             continue
         for timeframe in settings.timeframes:
             try:
-                data = fetch_market_data(raw_symbol, timeframe, limit=_limit_for_timeframe(timeframe, limit))
+                data = fetch_market_data(
+                    raw_symbol,
+                    timeframe,
+                    limit=_limit_for_timeframe(timeframe, limit),
+                    basis_cfg=settings.basis,
+                )
                 indicators = compute_indicators(data.candles, lookback_stats=int(settings.thresholds["lookback_stats"]))
                 marked = mark_signal_history(
                     indicators,
@@ -61,6 +66,7 @@ def scan_watchlist(
                     max_consecutive_oi_expansion=int(settings.thresholds["max_consecutive_oi_expansion"]),
                     oi_surge_3bar_pct=float(settings.thresholds.get("oi_surge_3bar_pct", 0.04)),
                     volume_surge_3bar_ratio=float(settings.thresholds.get("volume_surge_3bar_ratio", 2.5)),
+                    basis_hot_threshold=float((settings.basis or {}).get("hot_threshold", 0.0008)),
                 )
                 if bool((settings.squeeze or {}).get("enabled", True)):
                     marked = compute_squeeze_columns(marked, settings=settings.squeeze)
@@ -84,6 +90,7 @@ def scan_watchlist(
                     require_sma200_reclaim=bool(settings.alert_conditions["require_sma200_reclaim"]),
                     oi_surge_3bar_pct=float(settings.thresholds.get("oi_surge_3bar_pct", 0.04)),
                     volume_surge_3bar_ratio=float(settings.thresholds.get("volume_surge_3bar_ratio", 2.5)),
+                    basis_hot_threshold=float((settings.basis or {}).get("hot_threshold", 0.0008)),
                     notes=data.notes,
                 )
                 snapshots.append(snapshot)
