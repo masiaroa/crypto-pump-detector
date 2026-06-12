@@ -32,6 +32,6 @@ indicadores, sin romper el swipe arriba/abajo.
       (decisión: swipe de UN dedo intacto; dos dedos nunca navegan —
       no compiten porque se distinguen por número de dedos)
 - [x] Regenerar informe + dashboard, validar, 140 tests OK
-- [ ] Commit + merge a main + push
+- [x] Commit + merge a main + push
 - [ ] PENDIENTE DE APROBACIÓN: implementar PUMP_ALERT como evento custom en
       el scanner + chip en dashboard (no tocar OI surge / VOL surge)
