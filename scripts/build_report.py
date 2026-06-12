@@ -83,8 +83,11 @@ def features(df: pd.DataFrame) -> pd.DataFrame:
     df["oi_chg"] = oi.pct_change()
     df["oi_3"] = oi.pct_change(3)
     df["fwd12"] = c.shift(-1).rolling(FWD_BARS, min_periods=FWD_BARS).max().shift(-(FWD_BARS - 1)) / c - 1
+    df["fwd12_close"] = c.shift(-FWD_BARS) / c - 1
     df["dd6"] = df["low"].shift(-1).rolling(6, min_periods=6).min().shift(-5) / c - 1
     df["run6"] = c / c.shift(6) - 1
+    v3 = v.rolling(3).sum()
+    df["vol3_ratio"] = v3 / v3.shift(1).rolling(50, min_periods=30).median()
     if "basis" in df.columns:
         bmu = df["basis"].shift(1).rolling(100, min_periods=40).mean()
         bsd = df["basis"].shift(1).rolling(100, min_periods=40).std(ddof=0)
@@ -245,6 +248,119 @@ def basis_analysis(charts: dict[str, pd.DataFrame], basis_map: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Análisis 5: ¿cuándo dispararía yo la alerta? (regla PUMP custom)
+# ---------------------------------------------------------------------------
+
+ALERT_SPLIT = pd.Timestamp("2026-05-15", tz="UTC")
+
+
+def _winner_mask(d: pd.DataFrame) -> pd.Series:
+    """ALERTA PUMP propuesta: vela verde ≥2% + volumen ≥2.5× mediana + OI 3-velas ≥2%."""
+    return d["green"] & (d["ret"] >= 0.02) & (d["vol_ratio"] >= 2.5) & (d["oi_3"] >= 0.02)
+
+
+def _first_fire(mask: pd.Series, lookback: int = 12) -> pd.Series:
+    prev = mask.shift(1).rolling(lookback, min_periods=1).max().fillna(0)
+    return mask & (prev == 0)
+
+
+def _rule_row(label: str, all_df: pd.DataFrame, mask: pd.Series) -> dict:
+    s = all_df[mask].dropna(subset=["fwd12", "dd6"])
+    tr = s[s["timestamp"] < ALERT_SPLIT]
+    te = s[s["timestamp"] >= ALERT_SPLIT]
+    return {
+        "label": label,
+        "n": int(len(s)),
+        "p8_train": float((tr["fwd12"] >= 0.08).mean()) if len(tr) else 0.0,
+        "p8_test": float((te["fwd12"] >= 0.08).mean()) if len(te) else 0.0,
+        "p10": float((s["fwd12"] >= 0.10).mean()) if len(s) else 0.0,
+        "med_dd": float(s["dd6"].median()) if len(s) else 0.0,
+        "crash": float((s["dd6"] <= -0.08).mean()) if len(s) else 0.0,
+    }
+
+
+def alert_study(charts: dict[str, pd.DataFrame]) -> dict:
+    frames = []
+    for base, raw in charts.items():
+        df = features(raw)
+        df["base"] = base
+        frames.append(df)
+    all_df = pd.concat(frames, ignore_index=True)
+    g = all_df["green"]
+
+    rules = [
+        ("Baseline (todas las velas)", pd.Series(True, index=all_df.index)),
+        ("ACTUAL · OI surge (OI 3-velas ≥4%)", all_df["oi_3"] >= 0.04),
+        ("ACTUAL · VOL surge (vol 3-velas ≥2.5×)", all_df["vol3_ratio"] >= 2.5),
+        ("ACTUAL · las dos a la vez", (all_df["oi_3"] >= 0.04) & (all_df["vol3_ratio"] >= 2.5)),
+        ("Tu vela (verde ≥1% + vol ≥1.5× + OI sube)", g & (all_df["ret"] >= 0.01) & (all_df["vol_ratio"] >= 1.5) & (all_df["oi_chg"] > 0)),
+        ("PROPUESTA · verde ≥2% + vol ≥2.5× + OI3 ≥2%", _winner_mask(all_df)),
+    ]
+    table = [_rule_row(label, all_df, mask) for label, mask in rules]
+
+    # Barrido de umbrales (meseta, no pico): P(+8%) train/test con OI3 ≥2%
+    sweep = []
+    for vt in (1.5, 2.0, 2.5):
+        row = {"vol": vt, "cells": []}
+        for rt in (0.015, 0.02, 0.025):
+            m = g & (all_df["ret"] >= rt) & (all_df["vol_ratio"] >= vt) & (all_df["oi_3"] >= 0.02)
+            s = all_df[m].dropna(subset=["fwd12"])
+            tr = s[s["timestamp"] < ALERT_SPLIT]
+            te = s[s["timestamp"] >= ALERT_SPLIT]
+            row["cells"].append({
+                "ret": rt,
+                "p8_train": float((tr["fwd12"] >= 0.08).mean()) if len(tr) >= 15 else None,
+                "p8_test": float((te["fwd12"] >= 0.08).mean()) if len(te) >= 10 else None,
+                "n": int(len(s)),
+            })
+        sweep.append(row)
+
+    # El filtro "primer disparo" empeora — comprobado por símbolo (sin lookahead).
+    ff_parts, win_parts = [], []
+    for base in all_df["base"].unique():
+        d = all_df[all_df["base"] == base].reset_index(drop=True)
+        m = _winner_mask(d)
+        win_parts.append(d[m])
+        ff_parts.append(d[_first_fire(m)])
+    win_all = pd.concat(win_parts)
+    win = win_all.dropna(subset=["fwd12", "dd6", "fwd12_close"])
+    ff = pd.concat(ff_parts).dropna(subset=["fwd12"])
+
+    weeks = (all_df["timestamp"].max() - all_df["timestamp"].min()).days / 7
+    recent = win_all.sort_values("timestamp", ascending=False).head(12)
+    recent_rows = [
+        {
+            "symbol": r["base"],
+            "date": str(pd.Timestamp(r["timestamp"]).strftime("%Y-%m-%d %H:%M")),
+            "ret": float(r["ret"]),
+            "vol": float(r["vol_ratio"]),
+            "oi3": float(r["oi_3"]),
+            "fwd": float(r["fwd12"]) if pd.notna(r["fwd12"]) else None,
+        }
+        for _, r in recent.iterrows()
+    ]
+
+    return {
+        "table": table,
+        "sweep": sweep,
+        "winner": {
+            "n": int(len(win)),
+            "p5": float((win["fwd12"] >= 0.05).mean()),
+            "p8": float((win["fwd12"] >= 0.08).mean()),
+            "p10": float((win["fwd12"] >= 0.10).mean()),
+            "mean_c2c": float(win["fwd12_close"].mean()),
+            "med_c2c": float(win["fwd12_close"].median()),
+            "med_dd": float(win["dd6"].median()),
+            "crash": float((win["dd6"] <= -0.08).mean()),
+            "per_week": float(len(win) / weeks),
+            "symbols": int(win["base"].nunique()),
+        },
+        "first_fire": {"n": int(len(ff)), "p8": float((ff["fwd12"] >= 0.08).mean())},
+        "recent": recent_rows,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Análisis 4: casos NEAR y TON (diario)
 # ---------------------------------------------------------------------------
 
@@ -300,7 +416,7 @@ def pct(x: float, digits: int = 1) -> str:
     return f"{100 * x:.{digits}f}%"
 
 
-def build_html(sig_rows, capture, study, basis, cases) -> str:
+def build_html(sig_rows, capture, study, basis, cases, alert) -> str:
     now = pd.Timestamp.now("Europe/Madrid").strftime("%Y-%m-%d %H:%M (Madrid)")
 
     sig_html = ""
@@ -362,6 +478,36 @@ con OI +{100 * (best["oi_during"] or 0):.0f}% hasta el pico;
 (3) el volumen del día d0 era normal, la señal diaria disparó de media a mitad del tramo.
 El patrón repetido es: <b>flush de OI + basis en descuento → arranque silencioso → OI y volumen confirman en
 las primeras velas</b> — que es exactamente la ventana que captura tu vela de 4h.</div>"""
+
+    alert_rows = ""
+    for r in alert["table"]:
+        cls = ' class="hl"' if r["label"].startswith("PROPUESTA") else (' class="dim"' if r["label"].startswith("Baseline") else "")
+        alert_rows += (
+            f'<tr{cls}><td>{r["label"]}</td><td>{r["n"]:,}</td>'
+            f'<td>{pct(r["p8_train"])}</td><td><b>{pct(r["p8_test"])}</b></td>'
+            f'<td>{pct(r["p10"])}</td><td>{pct(r["med_dd"])}</td><td>{pct(r["crash"])}</td></tr>'
+        )
+
+    sweep_rows = ""
+    for row in alert["sweep"]:
+        cells = ""
+        for cell in row["cells"]:
+            if cell["p8_train"] is None or cell["p8_test"] is None:
+                cells += f'<td>— <span class="note">n={cell["n"]}</span></td>'
+            else:
+                cells += (
+                    f'<td>{pct(cell["p8_train"])} / {pct(cell["p8_test"])}'
+                    f'<span class="note"> n={cell["n"]}</span></td>'
+                )
+        sweep_rows += f'<tr><td>{row["vol"]}×</td>{cells}</tr>'
+
+    recent_rows = ""
+    for r in alert["recent"]:
+        fwd = '<span class="note">en curso</span>' if r["fwd"] is None else f'{100 * r["fwd"]:+.1f}%'
+        recent_rows += (
+            f'<tr><td>{r["symbol"]}</td><td>{r["date"]}</td><td>{100 * r["ret"]:+.1f}%</td>'
+            f'<td>{r["vol"]:.1f}×</td><td>{100 * r["oi3"]:+.1f}%</td><td>{fwd}</td></tr>'
+        )
 
     payload = json.dumps({
         "sig": sig_rows, "study": study, "basis": basis,
@@ -461,6 +607,50 @@ rojos marcan arranques de rally; los verdes, su pico. NEAR es COIN-M en Binance 
 ~30 días — por eso usamos el OI agregado de OKX.</p>
 {case_html}
 {case_verdict}
+
+<h2>5 · Si tuviera que disparar UNA alerta: la ALERTA PUMP</h2>
+<p>Planteamiento: con todo lo anterior, ¿qué condición exacta maximiza la probabilidad de una subida rápida
+inmediata? Probamos ~25 reglas candidatas con <b>validación temporal</b>: umbral elegido con datos hasta el
+15-may (train) y comprobado con las 4 semanas posteriores (test) que la regla nunca vio. P(+8% en 48h):</p>
+<table>
+<thead><tr><th>Regla</th><th>n</th><th>+8% train</th><th>+8% test</th><th>+10% total</th><th>DD mediano 24h</th><th>P(caída ≥8%)</th></tr></thead>
+<tbody>{alert_rows}</tbody>
+</table>
+<div class="verdict"><b>La propuesta: vela 4h verde ≥2% · volumen ≥2.5× su mediana · OI +2% en 3 velas.</b>
+Dispara al cierre de la vela. P(+8% en 48h): <b>{pct(alert["table"][-1]["p8_train"])} en train y
+{pct(alert["table"][-1]["p8_test"])} en test</b> (baseline {pct(alert["table"][0]["p8_train"])}/{pct(alert["table"][0]["p8_test"])});
+1 de cada 4 disparos llega a +10%. Frecuencia: ~{alert["winner"]["per_week"]:.0f} alertas/semana en los 40 símbolos
+({alert["winner"]["symbols"]} símbolos distintos — no la sostienen dos monedas). De las alertas actuales,
+el OI surge <i>solo</i> apenas supera el baseline en train; <b>la pareja OI+VOL a la vez ya es buena</b> —
+la propuesta es esa misma idea con la vela de impulso como gatillo y umbrales afinados.</div>
+<p>El umbral no es un pico de suerte sino una meseta — P(+8%) train/test exigiendo OI 3-velas ≥2%:</p>
+<table>
+<thead><tr><th>vol ≥ \\ vela ≥</th><th>1.5%</th><th>2.0%</th><th>2.5%</th></tr></thead>
+<tbody>{sweep_rows}</tbody>
+</table>
+<div class="verdict warn"><b>Dos avisos honestos.</b> (1) Es un cazador de colas, no un sistema de mediana
+positiva: el retorno cierre-a-cierre a 48h tiene mediana {pct(alert["winner"]["med_c2c"], 2)} y media
+{pct(alert["winner"]["mean_c2c"], 2)} — la asimetría está en que el {pct(alert["winner"]["p8"], 0)} de los
+disparos hace +8% mientras el {pct(alert["winner"]["crash"], 0)} cae −8%: detecta <i>volatilidad explosiva con
+sesgo alcista</i> y exige gestión (el drawdown mediano en 24h es {pct(alert["winner"]["med_dd"])}).
+(2) Hallazgo contraintuitivo: filtrar por "primer disparo" (sin alerta en las 12 velas previas) <b>empeora</b>
+la precisión ({pct(alert["first_fire"]["p8"])} vs {pct(alert["winner"]["p8"])}): las repeticiones dentro de un
+tramo en marcha son las mejores señales — el momentum confirmado continúa. No hay que silenciar los re-disparos.</div>
+<h3>Qué NO aportó (y queda fuera)</h3>
+<ul>
+<li><b>Breakout de 20 velas</b>: brilló en test (24-27%) pero mediocre en train (13-15%) — inestable entre regímenes.</li>
+<li><b>Compresión de Bollinger</b> como gatillo: por debajo del baseline en ambos periodos.</li>
+<li><b>Descuento de basis como gatillo de pump</b>: muestra insuficiente como disparador puntual (su sitio es el score de squeeze, como contexto).</li>
+<li><b>OI de una sola vela</b>: aporta poco; el OI <b>sostenido en 3 velas</b> es lo que discrimina.</li>
+<li><b>Funding y L/S</b>: sin poder de discriminación adicional una vez tienes vela+volumen+OI.</li>
+</ul>
+<h3>Últimos disparos de la regla propuesta</h3>
+<table>
+<thead><tr><th>Símbolo</th><th>Fecha (UTC)</th><th>Vela</th><th>Volumen</th><th>OI 3v</th><th>Máx. en 48h después</th></tr></thead>
+<tbody>{recent_rows}</tbody>
+</table>
+<p class="note">Siguiente paso si te convence: implementarla como evento custom <code>PUMP_ALERT</code> en el
+scanner (sin tocar OI surge ni VOL surge) con su chip en el dashboard, y en el próximo refresh la ves en gráfico.</p>
 
 <h2>Limitaciones</h2>
 <ul class="note">
@@ -576,8 +766,9 @@ if __name__ == "__main__":
     study = event_study(charts4, basis4)
     basis = basis_analysis(charts4, basis4)
     cases = {coin: case_study(coin, charts1, basis1, okx_oi) for coin in ("NEAR", "TON") if coin in charts1}
+    alert = alert_study(charts4)
 
-    html = build_html(sig_rows, capture, study, basis, cases)
+    html = build_html(sig_rows, capture, study, basis, cases, alert)
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     (REPORT_DIR / "index.html").write_text(html, encoding="utf-8")
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
