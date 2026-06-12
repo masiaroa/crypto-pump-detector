@@ -317,6 +317,18 @@ def test_build_html_overview_table_sorts_signals_and_surges_to_top():
     assert "ENTRY" in overview
 
 
+def test_build_html_supports_two_finger_pinch_zoom():
+    html = build_html([], {}, charts={})
+
+    # Pinch handler exists, is wired into chart init, and never fights the
+    # one-finger swipe (pinchActive guard) or the browser page-zoom.
+    assert "function attachPinchZoom(slideEl, chart)" in html
+    assert "attachPinchZoom(slideEl, chart)" in html
+    assert "pinchActive" in html
+    assert "touch-action: none" in html
+    assert "applyZoomRange(slideEl, min, min + span)" in html
+
+
 def test_build_html_renders_header_back_button_on_each_crypto_slide():
     charts = {
         "BYBIT:BTCUSDT.P": {

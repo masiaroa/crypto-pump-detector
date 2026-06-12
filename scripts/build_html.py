@@ -938,7 +938,10 @@ html, body {
   font-size: 9px; font-weight: 700; text-transform: uppercase;
   color: #8b949e; margin-bottom: 3px; letter-spacing: 0.07em; flex-shrink: 0;
 }
-.chart-box canvas { flex: 1; min-height: 0; display: block; width: 100% !important; cursor: crosshair; }
+/* touch-action none: two-finger pinch zooms the chart (custom handler), and
+   the browser's page-zoom/scroll never competes; one-finger swipes still
+   navigate via the custom slide handler. */
+.chart-box canvas { flex: 1; min-height: 0; display: block; width: 100% !important; cursor: crosshair; touch-action: none; }
 .zoom-reset {
   background: #21262d; color: #8b949e; border: 1px solid #30363d;
   width: 28px; height: 26px; border-radius: 6px;
@@ -1151,7 +1154,9 @@ STATIC_JS = r"""
   }, { passive: false });
 
   let touchInStack = false;
+  let pinchActive = false;
   slidesEl.addEventListener('touchstart', (e) => {
+    if (e.touches.length >= 2) { pinchActive = true; touchStartY = null; return; }
     touchStartY = e.changedTouches[0].clientY;
     // On mobile, swipes that start on the indicator panel cycle indicators
     // (both directions) instead of changing slides.
@@ -1159,6 +1164,12 @@ STATIC_JS = r"""
   }, { passive: true });
 
   slidesEl.addEventListener('touchend', (e) => {
+    // A pinch gesture never navigates — wait until all fingers lift.
+    if (pinchActive) {
+      if (e.touches.length === 0) pinchActive = false;
+      touchStartY = null;
+      return;
+    }
     if (touchStartY === null) return;
     const deltaY = touchStartY - e.changedTouches[0].clientY;
     touchStartY = null;
@@ -1472,6 +1483,57 @@ STATIC_JS = r"""
     canvas.addEventListener('pointercancel', (e) => finishDrag(e, false));
   }
 
+  // ── Two-finger pinch zoom on the x-axis (mobile/tablet) ─────────────────
+  // Zooming any chart of a slide re-ranges all four via applyZoomRange, so
+  // price, OI, volume and funding/basis stay in sync. One-finger gestures
+  // are untouched (they swipe between slides / indicators).
+  function attachPinchZoom(slideEl, chart) {
+    const canvas = chart.canvas;
+    if (!canvas || canvas._pinchAttached) return;
+    canvas._pinchAttached = true;
+    let pinch = null;
+
+    function activeChart() { return Chart.getChart(canvas) || chart; }
+
+    canvas.addEventListener('touchstart', (e) => {
+      if (e.touches.length !== 2) return;
+      const active = activeChart();
+      if (!active || !active.scales || !active.scales.x) return;
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const x0 = e.touches[0].clientX - rect.left;
+      const x1 = e.touches[1].clientX - rect.left;
+      const area = active.chartArea;
+      const mid = (x0 + x1) / 2;
+      pinch = {
+        startDist: Math.max(Math.abs(x1 - x0), 12),
+        midValue: active.scales.x.getValueForPixel(mid),
+        span: active.scales.x.max - active.scales.x.min,
+        midFrac: Math.min(1, Math.max(0, (mid - area.left) / Math.max(area.right - area.left, 1))),
+      };
+    }, { passive: false });
+
+    canvas.addEventListener('touchmove', (e) => {
+      if (!pinch || e.touches.length !== 2) return;
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const dist = Math.max(Math.abs(e.touches[1].clientX - e.touches[0].clientX), 12);
+      let span = pinch.span * pinch.startDist / dist;
+      const full = slideEl._fullRange;
+      if (full) {
+        span = Math.min(span, full.max - full.min);
+        span = Math.max(span, (full.max - full.min) / 50);  // cap: ~10 candles
+      }
+      const min = pinch.midValue - pinch.midFrac * span;
+      applyZoomRange(slideEl, min, min + span);
+    }, { passive: false });
+
+    canvas.addEventListener('touchend', (e) => {
+      if (e.touches.length < 2) pinch = null;
+    });
+    canvas.addEventListener('touchcancel', () => { pinch = null; });
+  }
+
   // ── Japanese candlestick chart (price or OI) ─────────────────────────────
   function candleChart(id, candleData, xMin, xMax, { showXTicks = true } = {}) {
     const canvas = document.getElementById(id);
@@ -1713,7 +1775,10 @@ STATIC_JS = r"""
     slideEl._charts = { price: priceChart, oi: oiChart, vol: volChart, fr: frChart };
     slideEl._fullRange = { min: xMin, max: xMax };
     slideEl._zoomRange = null;
-    chartsForSlide(slideEl).forEach(chart => attachZoomSelection(slideEl, chart));
+    chartsForSlide(slideEl).forEach(chart => {
+      attachZoomSelection(slideEl, chart);
+      attachPinchZoom(slideEl, chart);
+    });
   }
 })();
 """
