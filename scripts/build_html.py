@@ -609,6 +609,7 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
         </div>
         <div class="header-actions">
           <a class="header-link" href="coinalyze.html">Coinalyze metrics</a>
+          <a class="header-link" href="report.html">Informe OI·Vol·Basis</a>
           <span class="scan-time">Last scan: {esc(now_str)} &middot; {len(scan)} symbols</span>
         </div>
       </div>
