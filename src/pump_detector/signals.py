@@ -189,6 +189,7 @@ def mark_signal_history(
     max_consecutive_oi_expansion: int = 3,
     oi_surge_3bar_pct: float = 0.04,
     volume_surge_3bar_ratio: float = 2.5,
+    basis_hot_threshold: float = 0.0008,
 ) -> pd.DataFrame:
     """Mark historical signals using only data available at each candle close."""
     out = df.copy().sort_values("timestamp").reset_index(drop=True)
@@ -220,7 +221,7 @@ def mark_signal_history(
     ]
     if "basis_pct" in out.columns and out["basis_pct"].notna().any():
         out["basis_classification"] = [
-            classify_basis(row.basis_pct, out["basis_pct"].iloc[max(0, idx - 270) : idx])
+            classify_basis(row.basis_pct, out["basis_pct"].iloc[max(0, idx - 270) : idx], hot_threshold=basis_hot_threshold)
             for idx, row in out.iterrows()
         ]
     else:
@@ -296,6 +297,7 @@ def evaluate_latest(
     require_sma200_reclaim: bool = False,
     oi_surge_3bar_pct: float = 0.04,
     volume_surge_3bar_ratio: float = 2.5,
+    basis_hot_threshold: float = 0.0008,
     notes: str = "",
 ) -> SignalSnapshot:
     allowed_funding_classes = allowed_funding_classes or ["NEGATIVE", "NEUTRAL", "POSITIVE", "HOT"]
@@ -331,7 +333,7 @@ def evaluate_latest(
     funding_class = classify_funding(latest.get("funding_rate"), funding_recent)
     funding_percentile = _percentile_rank(funding_recent, latest.get("funding_rate"))
     basis_recent = df["basis_pct"].tail(270) if "basis_pct" in df else None
-    basis_class = classify_basis(latest.get("basis_pct"), basis_recent)
+    basis_class = classify_basis(latest.get("basis_pct"), basis_recent, hot_threshold=basis_hot_threshold)
     basis_percentile = _percentile_rank(basis_recent, latest.get("basis_pct"))
     pos_class = positioning_class(basis_class, funding_class)
     volume_ok = bool(latest["volume_zscore"] >= volume_zscore_threshold)

@@ -5,8 +5,10 @@ from pump_detector.accumulation import (
     latest_whale_score,
     ratio_history_rising,
     retail_turning_up,
+    spot_cvd_rising,
     spot_perp_volume_ratio,
     whale_pump_ignition,
+    whale_pump_ignition_series,
 )
 from pump_detector.signals import compute_indicators
 
@@ -47,6 +49,8 @@ def test_whale_score_high_when_cvd_climbs_with_flat_price():
     assert latest["cvd_slope"] > 0.15
     assert latest["whale_accum_score"] >= 55
     assert bool(latest["whale_accum_flag"]) is True
+    # Cumulative CVD column (charted): rising through the absorption phase.
+    assert latest["cvd"] > out["cvd"].iloc[119]
 
 
 def test_whale_score_low_with_balanced_flow():
@@ -105,6 +109,52 @@ def test_whale_pump_ignition_requires_prior_accum_and_retail_turn():
     assert whale_pump_ignition(no_accum, latest, retail_up) is False
     quiet = pd.Series({"price_return_pct": 0.001, "close_near_high": False, "volume_zscore": 0.5})
     assert whale_pump_ignition(history, quiet, retail_up) is False
+
+
+def test_whale_pump_ignition_series_marks_historical_pump():
+    n = 30
+    ts = pd.date_range("2026-01-01", periods=n, freq="4h", tz="UTC")
+    base_ms = int(ts[0].value // 1_000_000)
+    step = 4 * 3600 * 1000
+    df = pd.DataFrame(
+        {
+            "timestamp": ts,
+            "whale_accum_score": [10.0] * 20 + [55.0, 60.0, 58.0, 20.0, 15.0, 10.0, 5.0, 5.0, 5.0, 5.0],
+            "price_return_pct": [0.0] * 23 + [0.04] + [0.0] * 6,
+            "close_near_high": [False] * 23 + [True] + [False] * 6,
+            "volume_zscore": [0.0] * 23 + [3.0] + [0.0] * 6,
+        }
+    )
+    # Retail long% dips then turns up right at the ignition candle.
+    retail = [
+        {"timestamp_ms": base_ms + i * step, "long_pct": p}
+        for i, p in zip(range(20, 24), [0.42, 0.40, 0.39, 0.46])
+    ]
+    flags = whale_pump_ignition_series(df, retail)
+    assert bool(flags.iloc[23]) is True
+    assert flags.sum() == 1
+    assert not whale_pump_ignition_series(df, []).any()
+
+
+def test_spot_cvd_rising():
+    rising = pd.DataFrame({"volume": [100.0] * 20, "taker_buy_volume": [60.0] * 20})
+    falling = pd.DataFrame({"volume": [100.0] * 20, "taker_buy_volume": [40.0] * 20})
+    assert spot_cvd_rising(rising) is True
+    assert spot_cvd_rising(falling) is False
+    assert spot_cvd_rising(None) is None
+    assert spot_cvd_rising(pd.DataFrame()) is None
+    # Spot CVD falling halves the spot-led component of the whale score.
+    full, _ = latest_whale_score(
+        60.0, 20.0, top_position_long=0.0, top_position_rising=False,
+        global_long_ratio=0.0, spot_perp_vol_ratio=1.8, cvd_available=True,
+        spot_cvd_rising=True,
+    )
+    halved, _ = latest_whale_score(
+        60.0, 20.0, top_position_long=0.0, top_position_rising=False,
+        global_long_ratio=0.0, spot_perp_vol_ratio=1.8, cvd_available=True,
+        spot_cvd_rising=False,
+    )
+    assert full > halved
 
 
 def test_ratio_helpers():

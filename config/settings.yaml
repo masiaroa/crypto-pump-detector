@@ -41,6 +41,11 @@ liquidations:
     # Sin key se omite silenciosamente. 40 req/min.
     enabled: true
 
+basis:
+  enabled: true            # prima del perpetuo (premium index) como señal de posicionamiento
+  hot_threshold: 0.0008    # basis por encima de esto = longs masificados (HOT)
+  history_limit: 200       # velas de historial de basis (1 request por simbolo)
+
 squeeze:
   enabled: true
   lookback_divergence: 20      # velas para medir divergencia OI-precio

@@ -10,7 +10,7 @@ def _settings(timeframes: list[str]) -> Settings:
 def test_scan_watchlist_uses_eight_month_daily_and_proportional_4h_limits(monkeypatch):
     calls: list[tuple[str, int]] = []
 
-    def fake_fetch(raw_symbol: str, timeframe: str, limit: int):
+    def fake_fetch(raw_symbol: str, timeframe: str, limit: int, **kwargs):
         calls.append((timeframe, limit))
         raise DataUnavailable("offline")
 
@@ -28,7 +28,7 @@ def test_scan_watchlist_uses_eight_month_daily_and_proportional_4h_limits(monkey
 def test_scan_watchlist_preserves_explicit_limit_override(monkeypatch):
     calls: list[tuple[str, int]] = []
 
-    def fake_fetch(raw_symbol: str, timeframe: str, limit: int):
+    def fake_fetch(raw_symbol: str, timeframe: str, limit: int, **kwargs):
         calls.append((timeframe, limit))
         raise DataUnavailable("offline")
 

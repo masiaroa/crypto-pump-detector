@@ -317,7 +317,7 @@ def test_build_html_overview_table_sorts_signals_and_surges_to_top():
     assert "ENTRY" in overview
 
 
-def test_build_html_renders_single_floating_back_to_overview_button():
+def test_build_html_renders_header_back_button_on_each_crypto_slide():
     charts = {
         "BYBIT:BTCUSDT.P": {
             "4h": [
@@ -329,11 +329,14 @@ def test_build_html_renders_single_floating_back_to_overview_button():
 
     html = build_html([], scan, charts=charts)
 
-    # Exactly one Overview button: the floating one, shown on crypto slides
-    # via body.show-back-btn. The per-slide header button is gone.
-    assert html.count('id="back-to-overview"') == 1
-    assert 'class="back-btn"' not in html
-    assert "show-back-btn" in html
+    crypto_slide = html.split('id="slide-1"', 1)[1]
+    assert 'class="back-btn"' in crypto_slide
+    assert 'data-goto="0"' in crypto_slide
+    # Overview itself must not get a back button on slide 0.
+    overview_slide = html.split('id="slide-0"', 1)[1].split('id="slide-1"', 1)[0]
+    assert 'class="back-btn"' not in overview_slide
+    # The old floating duplicate is gone — the header button is the only one.
+    assert 'id="back-to-overview"' not in html
 
 
 def test_build_html_renders_long_short_ratio_chip_when_scan_has_ratio():
