@@ -209,12 +209,17 @@ def test_build_html_uses_vertical_desktop_chart_stack_with_compact_lower_panes()
     html = build_html([], {}, charts=charts)
 
     assert 'class="chart-box price-box"' in html
-    assert 'class="chart-box oi-box"' in html
-    assert 'class="chart-box vol-box"' in html
-    assert 'class="chart-box funding-box"' in html
+    assert 'class="chart-box oi-box active-ind" data-ind="oi"' in html
+    assert 'class="chart-box vol-box" data-ind="vol"' in html
+    assert 'class="chart-box funding-box" data-ind="fr"' in html
     assert "grid-template-columns: minmax(0, 1fr);" in html
-    assert "grid-template-rows: minmax(0, 4.2fr) minmax(0, 1.6fr) minmax(0, 0.9fr) minmax(0, 0.9fr);" in html
     assert 'grid-template-areas: "price" "oi" "volume" "funding";' in html
+    # Mobile: the three indicator boxes collapse into a one-at-a-time pager
+    # with a blue rail on the right; the wrapper is transparent on desktop.
+    assert 'class="indicator-stack"' in html
+    assert ".indicator-stack { display: contents; }" in html
+    assert 'class="ind-rail"' in html
+    assert 'grid-template-areas: "price" "stack";' in html
 
 
 def test_build_html_hides_repeated_time_labels_on_lower_charts():
@@ -312,7 +317,7 @@ def test_build_html_overview_table_sorts_signals_and_surges_to_top():
     assert "ENTRY" in overview
 
 
-def test_build_html_renders_back_to_overview_button_on_each_crypto_slide():
+def test_build_html_renders_single_floating_back_to_overview_button():
     charts = {
         "BYBIT:BTCUSDT.P": {
             "4h": [
@@ -324,12 +329,11 @@ def test_build_html_renders_back_to_overview_button_on_each_crypto_slide():
 
     html = build_html([], scan, charts=charts)
 
-    crypto_slide = html.split('id="slide-1"', 1)[1]
-    assert 'class="back-btn"' in crypto_slide
-    assert 'data-goto="0"' in crypto_slide
-    # Overview itself must not get a back button on slide 0.
-    overview_slide = html.split('id="slide-0"', 1)[1].split('id="slide-1"', 1)[0]
-    assert 'class="back-btn"' not in overview_slide
+    # Exactly one Overview button: the floating one, shown on crypto slides
+    # via body.show-back-btn. The per-slide header button is gone.
+    assert html.count('id="back-to-overview"') == 1
+    assert 'class="back-btn"' not in html
+    assert "show-back-btn" in html
 
 
 def test_build_html_renders_long_short_ratio_chip_when_scan_has_ratio():

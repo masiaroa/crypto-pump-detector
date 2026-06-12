@@ -673,9 +673,9 @@ def make_crypto_slide(
         for tf, v in liqs_by_tf.items()
     )
 
-    # On mobile we duplicate the TF toggle as an overlay on the price chart and
-    # render a floating "← Overview" button instead of taking header space.
-    # The existing click handler syncs all .tf-btn copies within a slide.
+    # On mobile we duplicate the TF toggle as an overlay on the price chart.
+    # Navigation back to the overview uses the single floating button
+    # (#back-to-overview); the existing click handler syncs all .tf-btn copies.
     tf_overlay_html = tf_toggle_html.replace('class="tf-toggle"', 'class="tf-toggle tf-toggle-overlay"', 1)
     zoom_reset_html = '<button class="zoom-reset" title="Reset zoom" aria-label="Reset zoom">&#8596;</button>'
     zoom_reset_overlay_html = '<button class="zoom-reset zoom-reset-overlay" title="Reset zoom" aria-label="Reset zoom">&#8596;</button>'
@@ -684,7 +684,6 @@ def make_crypto_slide(
     <section class="slide" id="slide-{idx}" data-idx="{idx}" data-symbol="{esc(symbol)}" data-default-tf="{esc(default_tf)}" {liq_data_attrs}>
       <div class="slide-header crypto-header">
         <div class="crypto-title">
-          <button class="back-btn" data-goto="0" title="Back to overview">&#8592; Overview</button>
           <span class="crypto-icon">{icon}</span>
           <span class="crypto-base">{esc(base)}</span>
           <span class="crypto-exchange">{esc(exchange)}</span>
@@ -710,17 +709,24 @@ def make_crypto_slide(
           {zoom_reset_overlay_html}
           <canvas id="price-{canvas_id}"></canvas>
         </div>
-        <div class="chart-box oi-box">
-          <div class="chart-label">Open Interest</div>
-          <canvas id="oi-{canvas_id}"></canvas>
-        </div>
-        <div class="chart-box vol-box">
-          <div class="chart-label">Volume</div>
-          <canvas id="vol-{canvas_id}"></canvas>
-        </div>
-        <div class="chart-box funding-box">
-          <div class="chart-label">Funding (bars) · Basis (line) — bps</div>
-          <canvas id="fr-{canvas_id}"></canvas>
+        <div class="indicator-stack">
+          <div class="chart-box oi-box active-ind" data-ind="oi">
+            <div class="chart-label">Open Interest</div>
+            <canvas id="oi-{canvas_id}"></canvas>
+          </div>
+          <div class="chart-box vol-box" data-ind="vol">
+            <div class="chart-label">Volume</div>
+            <canvas id="vol-{canvas_id}"></canvas>
+          </div>
+          <div class="chart-box funding-box" data-ind="fr">
+            <div class="chart-label">Funding (bars) · Basis (line) — bps</div>
+            <canvas id="fr-{canvas_id}"></canvas>
+          </div>
+          <div class="ind-rail">
+            <button class="ind-btn active" data-ind="oi" title="Open Interest">OI</button>
+            <button class="ind-btn" data-ind="vol" title="Volume">VOL</button>
+            <button class="ind-btn" data-ind="fr" title="Funding · Basis">F/B</button>
+          </div>
         </div>
       </div>
     </section>"""
@@ -782,12 +788,6 @@ html, body {
 
 .crypto-header { gap: 6px; }
 .crypto-title { display: flex; align-items: center; gap: 8px; }
-.back-btn {
-  background: #21262d; color: #58a6ff; border: 1px solid #30363d;
-  padding: 3px 8px; font-size: 11px; font-weight: 700; border-radius: 6px;
-  cursor: pointer; transition: all 0.15s;
-}
-.back-btn:hover { background: #30363d; color: #79c0ff; border-color: #58a6ff; }
 .ls-chip { font-size: 11px; }
 .crypto-icon { font-size: 14px; }
 .crypto-base { font-size: 20px; font-weight: 800; letter-spacing: -0.5px; }
@@ -913,6 +913,12 @@ html, body {
 .oi-box { grid-area: oi; }
 .vol-box { grid-area: volume; padding-top: 5px; padding-bottom: 5px; }
 .funding-box { grid-area: funding; padding-top: 5px; padding-bottom: 5px; }
+
+/* Indicator stack: transparent wrapper on desktop (children lay out in the
+   grid as before); on mobile it becomes a one-at-a-time pager with a blue
+   rail on the right to switch between OI / Volume / Funding·Basis. */
+.indicator-stack { display: contents; }
+.ind-rail { display: none; }
 .chart-label {
   font-size: 9px; font-weight: 700; text-transform: uppercase;
   color: #8b949e; margin-bottom: 3px; letter-spacing: 0.07em; flex-shrink: 0;
@@ -981,17 +987,38 @@ html, body {
 #back-to-overview:hover { background: #30363d; color: #79c0ff; border-color: #58a6ff; }
 body.show-back-btn #back-to-overview { display: inline-flex; align-items: center; }
 
-/* ── Mobile: keep the same vertical reading order on narrow screens ── */
-@media (max-width: 420px) {
+/* ── Mobile: price pinned on top, one indicator at a time below ── */
+@media (max-width: 480px) {
   .charts-grid {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 4.2fr) minmax(0, 1.6fr) minmax(0, 0.9fr) minmax(0, 0.9fr);
+    grid-template-rows: minmax(0, 2.6fr) minmax(0, 1.5fr);
+    grid-template-areas: "price" "stack";
   }
   #nav-dots { display: none; }
 
-  /* Header on mobile: no back button, no inline TF toggle — those move to
-     a floating button and a chart overlay respectively to free up space. */
-  .crypto-header > .crypto-title > .back-btn,
+  /* The three indicator boxes share one viewport; only the active one shows.
+     Swiping up/down inside this area cycles indicators (handled in JS). */
+  .indicator-stack { display: block; position: relative; grid-area: stack; min-height: 0; }
+  .indicator-stack .chart-box { position: absolute; inset: 0; display: none; }
+  .indicator-stack .chart-box.active-ind { display: flex; padding-right: 38px; }
+
+  /* Blue rail on the right edge — same accent as the desktop nav dots. */
+  .ind-rail {
+    display: flex; flex-direction: column; gap: 5px;
+    position: absolute; right: 5px; top: 50%; transform: translateY(-50%);
+    z-index: 6;
+  }
+  .ind-btn {
+    background: rgba(13,17,23,0.85); color: #8b949e;
+    border: 1px solid #30363d; border-radius: 6px;
+    width: 30px; height: 30px; font-size: 8px; font-weight: 800;
+    display: inline-flex; align-items: center; justify-content: center;
+    cursor: pointer; letter-spacing: 0.02em; padding: 0;
+  }
+  .ind-btn.active { color: #58a6ff; border-color: #58a6ff; background: #1a2f4b; }
+
+  /* Header on mobile: no inline TF toggle / zoom button — those move to a
+     chart overlay to free up space. */
   .crypto-header > .crypto-meta  > .tf-toggle,
   .crypto-header > .crypto-meta  > .zoom-reset { display: none; }
 
@@ -1081,6 +1108,34 @@ STATIC_JS = r"""
     if (next !== current) window.goTo(next);
   }
 
+  // ── Mobile indicator pager (OI / Volume / Funding·Basis) ────────────────
+  // One indicator at a time below the pinned price chart; the blue rail on
+  // the right or a vertical swipe on the panel switches between them.
+  const IND_ORDER = ['oi', 'vol', 'fr'];
+  const mobileMq  = window.matchMedia('(max-width: 480px)');
+  let   currentInd = 'oi';
+
+  function applyIndicator(name) {
+    if (IND_ORDER.indexOf(name) < 0) return;
+    currentInd = name;
+    slides.forEach(slide => {
+      slide.querySelectorAll('.indicator-stack .chart-box').forEach(box => {
+        box.classList.toggle('active-ind', box.dataset.ind === name);
+      });
+      slide.querySelectorAll('.ind-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.ind === name);
+      });
+      // Charts created while hidden have zero size — resize on reveal.
+      const chart = slide._charts && slide._charts[name];
+      if (chart) { try { chart.resize(); } catch (_) {} }
+    });
+  }
+
+  function cycleIndicator(direction) {
+    const i = IND_ORDER.indexOf(currentInd);
+    applyIndicator(IND_ORDER[(i + direction + IND_ORDER.length) % IND_ORDER.length]);
+  }
+
   slidesEl.addEventListener('wheel', (e) => {
     if (Math.abs(e.deltaY) < Math.abs(e.deltaX) || Math.abs(e.deltaY) < 18) return;
     e.preventDefault();
@@ -1090,8 +1145,12 @@ STATIC_JS = r"""
     window.setTimeout(() => { wheelLock = false; }, 450);
   }, { passive: false });
 
+  let touchInStack = false;
   slidesEl.addEventListener('touchstart', (e) => {
     touchStartY = e.changedTouches[0].clientY;
+    // On mobile, swipes that start on the indicator panel cycle indicators
+    // (both directions) instead of changing slides.
+    touchInStack = mobileMq.matches && !!e.target.closest('.indicator-stack');
   }, { passive: true });
 
   slidesEl.addEventListener('touchend', (e) => {
@@ -1099,6 +1158,7 @@ STATIC_JS = r"""
     const deltaY = touchStartY - e.changedTouches[0].clientY;
     touchStartY = null;
     if (Math.abs(deltaY) < 45) return;
+    if (touchInStack) { cycleIndicator(deltaY > 0 ? 1 : -1); return; }
     stepSlides(deltaY > 0 ? 1 : -1);
   }, { passive: true });
 
@@ -1137,6 +1197,9 @@ STATIC_JS = r"""
 
   // ── TF toggle handler — syncs all slides ────────────────────────────────
   slidesEl.addEventListener('click', (e) => {
+    const indBtn = e.target.closest('.ind-btn');
+    if (indBtn) { applyIndicator(indBtn.dataset.ind); return; }
+
     const resetBtn = e.target.closest('.zoom-reset');
     if (resetBtn) {
       const slide = resetBtn.closest('.slide');
