@@ -12,7 +12,7 @@ sobre el dashboard.
       dentro — incluida la línea azul del panel de funding = basis (premium index).
 - [x] Línea del `whale_accum_score` como overlay sobre el panel de OI (eje
       0-100 a la izquierda), coloreada por el flag de cada vela: azul = ACCUM,
-      rojo = WHALE PUMP. Solo se dibuja en velas con señal (hueco donde no hay,
+      violeta = WHALE PUMP. Solo se dibuja en velas con señal (hueco donde no hay,
       sin baseline gris). Requiere exportar `whale_accum_flag` y
       `whale_pump_flag` por vela (hecho en scan.py `_export_charts`); la línea
       aparece tras el próximo `refresh.sh` — los JSON commiteados aún no llevan

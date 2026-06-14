@@ -1794,7 +1794,7 @@ STATIC_JS = r"""
     }
 
     // Whale-accumulation score (0-100) line on the OI pane. Only drawn on
-    // candles where a whale signal is active (ACCUM = blue, WHALE PUMP = red);
+    // candles where a whale signal is active (ACCUM = blue, WHALE PUMP = violet);
     // candles with no signal are gaps, not a baseline.
     const isTrue = v => v === true || v === 'True' || v === 'true' || v === 1;
     const whalePoints = raw.map(d => {
@@ -1804,7 +1804,7 @@ STATIC_JS = r"""
       return { x: Date.parse(d.timestamp), y: (accum || pump) && Number.isFinite(score) ? score : null, accum, pump };
     });
     if (oiChart && whalePoints.some(p => p.y !== null)) {
-      const whaleColor = pt => (pt && pt.pump) ? '#ff7b72' : '#58a6ff';
+      const whaleColor = pt => (pt && pt.pump) ? '#a371f7' : '#58a6ff';
       oiChart.options.scales.y2 = {
         display: true, position: 'left', min: 0, max: 100,
         ticks: { color: '#6e7681', font: { size: 7 }, maxTicksLimit: 3 },
@@ -1843,7 +1843,7 @@ STATIC_JS = r"""
   // ── Indicator info popovers ("i" next to each panel label) ───────────────
   const INDICATOR_INFO = {
     price: 'Velas de precio (OHLC). Si hay datos de posicionamiento, se superpone el ratio long/short de cuentas como líneas sobre el precio.',
-    oi: 'Interés abierto: número de contratos vivos. OI subiendo con el precio plano o cayendo = posiciones acumulándose. Si hay señal de ballenas, se superpone el whale-score (línea, 0-100, eje izq.): azul = acumulación (ACCUM), rojo = ignición (WHALE PUMP). Sin señal no se dibuja.',
+    oi: 'Interés abierto: número de contratos vivos (velas/línea). OI subiendo con el precio plano o cayendo = posiciones acumulándose sin que el precio escape. · Whale indicator: cuando hay señal se superpone una línea con el score 0-100 (eje izquierdo) que mide cuánto acumulan las manos fuertes. Azul = ACCUM (acumulación: build de OI + top traders largos + retail aún fuera). Violeta = WHALE PUMP (la acumulación se dispara: vela verde con volumen y retail entrando). Cuanto más alto el nivel, más fuerte la señal; si no hay señal la línea no se dibuja.',
     vol: 'Volumen por vela (barras). En símbolos servidos por Binance se superpone el CVD (delta acumulado de taker buy − sell) como línea: pendiente al alza = compra agresiva dominante.',
     fr: 'Barras = funding rate (amarillo ≥0: los longs pagan a los shorts; rojo <0: los shorts pagan a los longs). Línea azul = basis: la prima del perpetuo frente al spot (premium index) en bps — >0 perp caro / longs masificados, <0 descuento.',
   };
