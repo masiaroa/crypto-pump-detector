@@ -711,22 +711,22 @@ def make_crypto_slide(
       </div>
       <div class="charts-grid">
         <div class="chart-box price-box">
-          <div class="chart-label">Price</div>
+          <div class="chart-label"><span class="cl-text">Price</span><button type="button" class="ind-info" data-info="price" aria-label="Qué muestra este panel">i</button></div>
           {tf_overlay_html}
           {zoom_reset_overlay_html}
           <canvas id="price-{canvas_id}"></canvas>
         </div>
         <div class="indicator-stack">
           <div class="chart-box oi-box active-ind" data-ind="oi">
-            <div class="chart-label">Open Interest</div>
+            <div class="chart-label"><span class="cl-text">Open Interest</span><button type="button" class="ind-info" data-info="oi" aria-label="Qué muestra este panel">i</button></div>
             <canvas id="oi-{canvas_id}"></canvas>
           </div>
           <div class="chart-box vol-box" data-ind="vol">
-            <div class="chart-label">Volume</div>
+            <div class="chart-label"><span class="cl-text">Volume</span><button type="button" class="ind-info" data-info="vol" aria-label="Qué muestra este panel">i</button></div>
             <canvas id="vol-{canvas_id}"></canvas>
           </div>
           <div class="chart-box funding-box" data-ind="fr">
-            <div class="chart-label">Funding (bars) · Basis (line) — bps</div>
+            <div class="chart-label"><span class="cl-text">Funding (bars) · Basis (line) — bps</span><button type="button" class="ind-info" data-info="fr" aria-label="Qué muestra este panel">i</button></div>
             <canvas id="fr-{canvas_id}"></canvas>
           </div>
           <div class="ind-rail">
@@ -937,6 +937,24 @@ html, body {
 .chart-label {
   font-size: 9px; font-weight: 700; text-transform: uppercase;
   color: #8b949e; margin-bottom: 3px; letter-spacing: 0.07em; flex-shrink: 0;
+  display: flex; align-items: center; gap: 5px;
+}
+.ind-info {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 13px; height: 13px; border-radius: 50%; flex-shrink: 0;
+  border: 1px solid #4d5560; background: transparent; color: #8b949e;
+  font-size: 9px; font-weight: 800; font-style: italic; line-height: 1;
+  font-family: Georgia, "Times New Roman", serif;
+  text-transform: none; letter-spacing: normal; padding: 0; cursor: pointer;
+}
+.ind-info:hover { color: #58a6ff; border-color: #58a6ff; }
+.ind-info-pop {
+  position: fixed; z-index: 50; max-width: calc(100vw - 20px);
+  background: #161b22; color: #c9d1d9; border: 1px solid #30363d;
+  border-radius: 8px; padding: 9px 11px;
+  font-size: 11px; font-weight: 400; line-height: 1.45;
+  text-transform: none; letter-spacing: normal;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.5);
 }
 /* touch-action none: two-finger pinch zooms the chart (custom handler), and
    the browser's page-zoom/scroll never competes; one-finger swipes still
@@ -1736,7 +1754,7 @@ STATIC_JS = r"""
       ? raw.filter(d => Number.isFinite(+(d.cvd || 0)))
            .map(d => ({ x: Date.parse(d.timestamp), y: +d.cvd }))
       : [];
-    const volLabel = slideEl.querySelector('[data-ind="vol"] .chart-label');
+    const volLabel = slideEl.querySelector('[data-ind="vol"] .chart-label .cl-text');
     if (volLabel) volLabel.textContent = cvdPoints.length ? 'Volume (bars) · CVD (line)' : 'Volume';
 
     const volChart = barChart   ('vol-' + id, volPoints, '#8b949e', xMin, xMax, cvdPoints);
@@ -1780,6 +1798,40 @@ STATIC_JS = r"""
       attachPinchZoom(slideEl, chart);
     });
   }
+
+  // ── Indicator info popovers ("i" next to each panel label) ───────────────
+  const INDICATOR_INFO = {
+    price: 'Velas de precio (OHLC). Si hay datos de posicionamiento, se superpone el ratio long/short de cuentas como líneas sobre el precio.',
+    oi: 'Interés abierto: número de contratos vivos. OI subiendo con el precio plano o cayendo = posiciones acumulándose sin que el precio escape (posible acumulación / squeeze).',
+    vol: 'Volumen por vela (barras). En símbolos servidos por Binance se superpone el CVD (delta acumulado de taker buy − sell) como línea: pendiente al alza = compra agresiva dominante.',
+    fr: 'Barras = funding rate (amarillo ≥0: los longs pagan a los shorts; rojo <0: los shorts pagan a los longs). Línea azul = basis: la prima del perpetuo frente al spot (premium index) en bps — >0 perp caro / longs masificados, <0 descuento.',
+  };
+  let _infoPop = null;
+  function hideInfoPop() { if (_infoPop) { _infoPop.remove(); _infoPop = null; } }
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('.ind-info');
+    if (!btn) { if (!e.target.closest('.ind-info-pop')) hideInfoPop(); return; }
+    e.preventDefault();
+    const key = btn.dataset.info;
+    const wasOpen = _infoPop && _infoPop.dataset.key === key;
+    hideInfoPop();
+    if (wasOpen) return;
+    const pop = document.createElement('div');
+    pop.className = 'ind-info-pop';
+    pop.dataset.key = key;
+    pop.textContent = INDICATOR_INFO[key] || '';
+    document.body.appendChild(pop);
+    const r = btn.getBoundingClientRect();
+    const pw = Math.min(280, window.innerWidth - 20);
+    pop.style.width = pw + 'px';
+    let left = r.left;
+    if (left + pw > window.innerWidth - 10) left = window.innerWidth - pw - 10;
+    pop.style.left = Math.max(10, left) + 'px';
+    pop.style.top = (r.bottom + 6) + 'px';
+    _infoPop = pop;
+  });
+  window.addEventListener('resize', hideInfoPop);
+  slidesEl.addEventListener('scroll', hideInfoPop, true);
 })();
 """
 
