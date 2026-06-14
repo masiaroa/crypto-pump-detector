@@ -10,10 +10,14 @@ sobre el dashboard.
 - [x] Icono "i" clicable junto a la etiqueta de cada panel (Price / Open
       Interest / Volume / Funding·Basis) con un popover que explique qué lleva
       dentro — incluida la línea azul del panel de funding = basis (premium index).
-- [ ] Línea móvil del `whale_accum_score` en el gráfico, al estilo de la línea
-      de basis. Pendiente de confirmar ubicación: panel propio "ACCUM" en el
-      pager vs overlay sobre el panel de OI. (El score por vela ya se exporta al
-      JSON, no hace falta dato nuevo.)
+- [x] Línea del `whale_accum_score` como overlay sobre el panel de OI (eje
+      0-100 a la izquierda), coloreada por el flag de cada vela: azul = ACCUM,
+      rojo = WHALE PUMP. Solo se dibuja en velas con señal (hueco donde no hay,
+      sin baseline gris). Requiere exportar `whale_accum_flag` y
+      `whale_pump_flag` por vela (hecho en scan.py `_export_charts`); la línea
+      aparece tras el próximo `refresh.sh` — los JSON commiteados aún no llevan
+      los flags. Verificado recomputando el flag por vela de HBAR: enciende en
+      06-13 08:00→20:00 (score≥75 en OI-only) y deja hueco en las de score 74.
 
 ## Notas
 - `refresh.sh` es local; en CI Bybit/Binance están geo-bloqueados. Validar build

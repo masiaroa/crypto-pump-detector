@@ -209,7 +209,7 @@ def _export_charts(details: dict, charts_dir: Path, ls_map: dict | None = None) 
         "open_interest", "oi_open", "oi_high", "oi_low", "oi_close",
         "volume", "funding_rate", "basis_pct",
         "squeeze_setup_score", "stop_cluster_level",
-        "whale_accum_score", "cvd", "cvd_slope",
+        "whale_accum_score", "whale_accum_flag", "whale_pump_flag", "cvd", "cvd_slope",
     ]
     for (raw_symbol, timeframe), df in details.items():
         available = [c for c in cols if c in df.columns]

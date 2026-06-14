@@ -1574,6 +1574,9 @@ STATIC_JS = r"""
             callbacks: {
               label: (ctx) => {
                 const r = ctx.raw;
+                if (ctx.dataset.type === 'line' && ctx.dataset.label) {
+                  return ctx.dataset.label + ' ' + (+r.y).toFixed(0) + (r.pump ? ' · PUMP' : (r.accum ? ' · ACCUM' : ''));
+                }
                 const f = (v) => v >= 1000
                   ? (+v).toLocaleString('en', { maximumFractionDigits: 0 })
                   : String(+(+v).toPrecision(5));
@@ -1790,6 +1793,44 @@ STATIC_JS = r"""
       priceChart.update('none');
     }
 
+    // Whale-accumulation score (0-100) line on the OI pane. Only drawn on
+    // candles where a whale signal is active (ACCUM = blue, WHALE PUMP = red);
+    // candles with no signal are gaps, not a baseline.
+    const isTrue = v => v === true || v === 'True' || v === 'true' || v === 1;
+    const whalePoints = raw.map(d => {
+      const accum = isTrue(d.whale_accum_flag);
+      const pump  = isTrue(d.whale_pump_flag);
+      const score = +d.whale_accum_score;
+      return { x: Date.parse(d.timestamp), y: (accum || pump) && Number.isFinite(score) ? score : null, accum, pump };
+    });
+    if (oiChart && whalePoints.some(p => p.y !== null)) {
+      const whaleColor = pt => (pt && pt.pump) ? '#ff7b72' : '#58a6ff';
+      oiChart.options.scales.y2 = {
+        display: true, position: 'left', min: 0, max: 100,
+        ticks: { color: '#6e7681', font: { size: 7 }, maxTicksLimit: 3 },
+        grid: { display: false },
+      };
+      oiChart.data.datasets.push({
+        type: 'line',
+        label: 'ACCUM',
+        data: whalePoints,
+        borderColor: '#58a6ff',
+        segment: { borderColor: ctx => whaleColor(ctx.p1 && ctx.p1.raw) },
+        backgroundColor: 'transparent',
+        borderWidth: 1.75,
+        spanGaps: false,
+        pointRadius: ctx => (ctx.raw && ctx.raw.y != null) ? 1.6 : 0,
+        pointBackgroundColor: ctx => whaleColor(ctx.raw),
+        pointBorderColor: ctx => whaleColor(ctx.raw),
+        tension: 0.2,
+        order: 0,
+        yAxisID: 'y2',
+      });
+      const oiLabel = slideEl.querySelector('[data-ind="oi"] .chart-label .cl-text');
+      if (oiLabel) oiLabel.textContent = 'Open Interest · ACCUM (line)';
+      oiChart.update('none');
+    }
+
     slideEl._charts = { price: priceChart, oi: oiChart, vol: volChart, fr: frChart };
     slideEl._fullRange = { min: xMin, max: xMax };
     slideEl._zoomRange = null;
@@ -1802,7 +1843,7 @@ STATIC_JS = r"""
   // ── Indicator info popovers ("i" next to each panel label) ───────────────
   const INDICATOR_INFO = {
     price: 'Velas de precio (OHLC). Si hay datos de posicionamiento, se superpone el ratio long/short de cuentas como líneas sobre el precio.',
-    oi: 'Interés abierto: número de contratos vivos. OI subiendo con el precio plano o cayendo = posiciones acumulándose sin que el precio escape (posible acumulación / squeeze).',
+    oi: 'Interés abierto: número de contratos vivos. OI subiendo con el precio plano o cayendo = posiciones acumulándose. Si hay señal de ballenas, se superpone el whale-score (línea, 0-100, eje izq.): azul = acumulación (ACCUM), rojo = ignición (WHALE PUMP). Sin señal no se dibuja.',
     vol: 'Volumen por vela (barras). En símbolos servidos por Binance se superpone el CVD (delta acumulado de taker buy − sell) como línea: pendiente al alza = compra agresiva dominante.',
     fr: 'Barras = funding rate (amarillo ≥0: los longs pagan a los shorts; rojo <0: los shorts pagan a los longs). Línea azul = basis: la prima del perpetuo frente al spot (premium index) en bps — >0 perp caro / longs masificados, <0 descuento.',
   };
