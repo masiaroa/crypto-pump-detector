@@ -756,6 +756,8 @@ html, body {
 /* ── Scroll container ── */
 #slides {
   height: 100vh;
+  height: 100dvh; /* dynamic vh: account for mobile browser chrome so the
+                     bottom of each slide isn't hidden behind the address bar */
   overflow-y: scroll;
   scroll-snap-type: y mandatory;
   scroll-behavior: smooth;
@@ -765,6 +767,8 @@ html, body {
 /* ── Each slide ── */
 .slide {
   height: 100vh;
+  height: 100dvh; /* dynamic vh: keeps the charts fully inside the visible
+                     viewport on mobile (address bar shown or hidden) */
   scroll-snap-align: start;
   display: flex;
   flex-direction: column;
