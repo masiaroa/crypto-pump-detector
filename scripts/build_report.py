@@ -86,6 +86,7 @@ def features(df: pd.DataFrame) -> pd.DataFrame:
     df["fwd12_close"] = c.shift(-FWD_BARS) / c - 1
     df["dd6"] = df["low"].shift(-1).rolling(6, min_periods=6).min().shift(-5) / c - 1
     df["run6"] = c / c.shift(6) - 1
+    df["run3"] = c / c.shift(3) - 1
     v3 = v.rolling(3).sum()
     df["vol3_ratio"] = v3 / v3.shift(1).rolling(50, min_periods=30).median()
     if "basis" in df.columns:
@@ -360,6 +361,57 @@ def alert_study(charts: dict[str, pd.DataFrame]) -> dict:
     }
 
 
+def whale_study(valid: pd.DataFrame) -> dict:
+    """¿Tiene edge el 'whale accumulation' del dashboard? Mismo frame 4h, métrica
+    P(máx +10% en 48h) y retorno cierre-a-cierre a +12 velas, todo desde los datos."""
+    n = len(valid)
+    base_p10 = float((valid["fwd12"] >= 0.10).mean())
+
+    def nz(col: str) -> float:
+        return float((valid[col].fillna(0) != 0).mean()) if col in valid else 0.0
+
+    ts = valid["timestamp"]
+    mid = ts.median()
+    early, late = valid[ts < mid], valid[ts >= mid]
+    cov = {
+        "score": nz("whale_accum_score"), "cvd": nz("cvd"), "ls": nz("ls_long"),
+        "ls_early": float((early["ls_long"].fillna(0) != 0).mean()),
+        "ls_late": float((late["ls_long"].fillna(0) != 0).mean()),
+    }
+
+    af = valid[valid["whale_accum_flag"].fillna(False).astype(bool)]
+    flag = {
+        "n": int(len(af)), "n_total": n,
+        "p10": float((af["fwd12"] >= 0.10).mean()) if len(af) else 0.0,
+        "mean_c2c": float(af["fwd12_close"].mean()) if len(af) else 0.0,
+        "pump_fires": int(valid["whale_pump_flag"].fillna(False).astype(bool).sum()),
+    }
+
+    s = valid[valid["whale_accum_score"] > 0].dropna(subset=["fwd12_close"])
+    quint = []
+    if len(s) >= 50:
+        qs = s["whale_accum_score"].quantile([0, .2, .4, .6, .8, 1.0]).to_numpy()
+        for i in range(5):
+            lo, hi = qs[i], qs[i + 1]
+            upper = (s["whale_accum_score"] <= hi) if i == 4 else (s["whale_accum_score"] < hi)
+            seg = s[(s["whale_accum_score"] >= lo) & upper]
+            quint.append({"lo": float(lo), "hi": float(hi), "n": int(len(seg)),
+                          "mean": float(seg["fwd12_close"].mean()), "hit": float((seg["fwd12_close"] > 0).mean())})
+
+    def edge(mask) -> dict:
+        seg = valid[mask].dropna(subset=["fwd12"])
+        p = float((seg["fwd12"] >= 0.10).mean()) if len(seg) else 0.0
+        return {"n": int(len(seg)), "p10": p, "lift": (p / base_p10) if base_p10 else 0.0}
+
+    oi, pr = valid["oi_3"], valid["run3"]
+    tests = [
+        ("Precio plano (|Δ3v|≤2%) + OI 3v ≥5%", edge((pr.abs() <= 0.02) & (oi >= 0.05))),
+        ("Precio bajando (Δ3v < −1%) + OI 3v ≥5%", edge((pr < -0.01) & (oi >= 0.05))),
+        ("Precio subiendo (Δ3v ≥2%) + OI 3v ≥5% (momentum)", edge((pr >= 0.02) & (oi >= 0.05))),
+    ]
+    return {"base_p10": base_p10, "cov": cov, "flag": flag, "quint": quint, "tests": tests}
+
+
 # ---------------------------------------------------------------------------
 # Análisis 4: casos NEAR y TON (diario)
 # ---------------------------------------------------------------------------
@@ -416,8 +468,55 @@ def pct(x: float, digits: int = 1) -> str:
     return f"{100 * x:.{digits}f}%"
 
 
-def build_html(sig_rows, capture, study, basis, cases, alert) -> str:
+def build_html(sig_rows, capture, study, basis, cases, alert, whale) -> str:
     now = pd.Timestamp.now("Europe/Madrid").strftime("%Y-%m-%d %H:%M (Madrid)")
+
+    cov, wf = whale["cov"], whale["flag"]
+    pump_lift = alert["winner"]["p10"] / whale["base_p10"] if whale["base_p10"] else 0.0
+    quint_html = "".join(
+        f'<tr><td>Q{i + 1} (score {q["lo"]:.0f}–{q["hi"]:.0f})</td><td>{q["n"]:,}</td>'
+        f'<td>{pct(q["mean"], 2)}</td><td>{pct(q["hit"], 0)}</td></tr>'
+        for i, q in enumerate(whale["quint"])
+    )
+    wtest_rows = []
+    for t in whale["tests"]:
+        cls = ' class="hl"' if "momentum" in t[0] else ""
+        wtest_rows.append(
+            f'<tr{cls}><td>{t[0]}</td><td>{t[1]["n"]:,}</td>'
+            f'<td><b>{pct(t[1]["p10"])}</b></td><td>{t[1]["lift"]:.1f}×</td></tr>'
+        )
+    wtest_html = "".join(wtest_rows)
+    whale_html = f"""
+<h2>6 · El "whale accumulation" — por qué sale del dashboard</h2>
+<p>El indicador azul/violeta (acumulación de "manos fuertes": build de OI + CVD + posicionamiento de top traders +
+retail aún fuera) llegó a pintarse en el panel de OI. Antes de confiar en él lo medimos sobre las mismas
+<b>{wf["n_total"]:,} velas 4h</b>. Tres problemas, de fondo a forma:</p>
+<ul>
+<li><b>No es computable de forma consistente.</b> Sus inputs clave solo existen en velas recientes: el ratio
+long/short de retail está al <b>{pct(cov["ls_early"], 0)} en la primera mitad del histórico y al {pct(cov["ls_late"], 0)}
+en la segunda</b>; el CVD spot cubre el {pct(cov["cvd"], 0)} y el score sale &gt;0 solo en el {pct(cov["score"], 0)} de
+las velas. El resto del tiempo es OI puro disfrazado de "whale".</li>
+<li><b>El score no ordena el futuro.</b> Partiendo las velas con score&gt;0 en quintiles, el retorno cierre-a-cierre a
++12 velas no es monótono (el quintil alto y el bajo se confunden) y el acierto se queda por debajo del 50%.</li>
+<li><b>El flag azul no aporta dirección y el violeta no salta nunca.</b> Las velas con <code>whale_accum_flag</code> tienen
+media cierre-a-cierre a 48h de <b>{pct(wf["mean_c2c"], 2)}</b> (≈0) y acierto por debajo del 50%; lo poco que sube su
+P(+10%) es volatilidad de OI sin sesgo, no edge direccional. Y <code>whale_pump_flag</code> disparó <b>{wf["pump_fires"]}
+veces en {wf["n_total"]:,}</b> — exige 5 condiciones a la vez, dos de ellas (CVD y L/S) con datos que casi nunca existen.</li>
+</ul>
+<table>
+<thead><tr><th>Quintil del score</th><th>n</th><th>Retorno medio +12v</th><th>Acierto</th></tr></thead>
+<tbody>{quint_html}</tbody>
+</table>
+<p>Y la tesis que lo sostenía —<b>"precio plano + OI subiendo = acumulación previa al pump"</b>— no aparece en los datos.
+Con la métrica de la sección 1 (P de +10% en 48h, base {pct(whale["base_p10"])}):</p>
+<table>
+<thead><tr><th>Condición (ventana 3 velas)</th><th>n</th><th>P(+10% en 48h)</th><th>Lift vs base</th></tr></thead>
+<tbody>{wtest_html}</tbody>
+</table>
+<div class="verdict warn"><b>Veredicto: el whale accumulation se retira del dashboard.</b> El "precio plano + OI subiendo"
+está en la base o por debajo; el OI solo discrimina al alza cuando <b>el precio ya se mueve</b> y el volumen acompaña —
+que es exactamente la <code>PUMP_ALERT</code> de la sección 5 (OI+VOL juntos sobre vela de impulso, lift {pump_lift:.1f}×
+en esta misma métrica). La oportunidad en OI+volumen es esa <b>co-ocurrencia</b>, no la acumulación silenciosa.</div>"""
 
     sig_html = ""
     for r in sig_rows:
@@ -651,6 +750,7 @@ tramo en marcha son las mejores señales — el momentum confirmado continúa. N
 </table>
 <p class="note">Siguiente paso si te convence: implementarla como evento custom <code>PUMP_ALERT</code> en el
 scanner (sin tocar OI surge ni VOL surge) con su chip en el dashboard, y en el próximo refresh la ves en gráfico.</p>
+{whale_html}
 
 <h2>Limitaciones</h2>
 <ul class="note">
@@ -767,8 +867,9 @@ if __name__ == "__main__":
     basis = basis_analysis(charts4, basis4)
     cases = {coin: case_study(coin, charts1, basis1, okx_oi) for coin in ("NEAR", "TON") if coin in charts1}
     alert = alert_study(charts4)
+    whale = whale_study(valid)
 
-    html = build_html(sig_rows, capture, study, basis, cases, alert)
+    html = build_html(sig_rows, capture, study, basis, cases, alert, whale)
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     (REPORT_DIR / "index.html").write_text(html, encoding="utf-8")
     DOCS_DIR.mkdir(parents=True, exist_ok=True)

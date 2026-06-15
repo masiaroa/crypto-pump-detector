@@ -455,6 +455,8 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
         raw_sym = str(ev.get("raw_symbol", ""))
         if not raw_sym or raw_sym in latest_event:
             continue  # `events` is already sorted desc by timestamp
+        if ev.get("event_type") in {"WHALE_ACCUM", "WHALE_PUMP"}:
+            continue  # whale indicator retired from the dashboard — skip its events
         latest_event[raw_sym] = ev
 
     # Build overview rows — one row per known symbol. Signals are sorted to the top,
@@ -467,14 +469,10 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
         vol_surge = bool(row.get("volume_surge_flag"))
         squeeze_flag = bool(row.get("squeeze_setup_flag"))
         squeeze_ignition = bool(row.get("squeeze_ignition_flag"))
-        whale_flag = bool(row.get("whale_accum_flag"))
-        whale_pump = bool(row.get("whale_pump_flag"))
         priority = (
             7 if has_signal
             else 6 if squeeze_ignition
-            else 5 if whale_pump
             else 4 if squeeze_flag
-            else 3 if whale_flag
             else 2 if oi_surge
             else 1 if vol_surge
             else 0
@@ -490,9 +488,6 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
             "squeeze_flag": squeeze_flag,
             "squeeze_ignition": squeeze_ignition,
             "squeeze": safe_float(row.get("squeeze_setup_score", 0)),
-            "whale_flag": whale_flag,
-            "whale_pump": whale_pump,
-            "whale": safe_float(row.get("whale_accum_score", 0)),
             "spot_led": bool(row.get("spot_led_flag")),
             "bull": safe_float(row.get("early_bullish_score", 0)),
             "risk": safe_float(row.get("blowoff_risk_score", 0)),
@@ -518,9 +513,9 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
         label = esc(_short_base(r["symbol"]))
         if r["has_signal"]:
             icon = "🟢"
-        elif r["squeeze_ignition"] or r["whale_pump"]:
+        elif r["squeeze_ignition"]:
             icon = "🔴"
-        elif r["squeeze_flag"] or r["whale_flag"]:
+        elif r["squeeze_flag"]:
             icon = "🟣"
         elif r["oi_surge"] or r["vol_surge"]:
             icon = "🟡"
@@ -531,12 +526,8 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
             sig_chips += '<span class="sig-chip sig-entry">ENTRY</span>'
         if r["squeeze_ignition"]:
             sig_chips += '<span class="sig-chip sig-ignition" title="Squeeze disparándose: setup previo + vela verde con liquidaciones de shorts / short covering / compra agresiva">IGNITION</span>'
-        if r["whale_pump"]:
-            sig_chips += '<span class="sig-chip sig-pump" title="Acumulación previa + vela verde con volumen + retail entrando">WHALE&nbsp;PUMP</span>'
         if r["squeeze_flag"]:
             sig_chips += f'<span class="sig-chip sig-squeeze" title="Squeeze setup score {r["squeeze"]:.0f} — shorts atrapados">SQUEEZE</span>'
-        if r["whale_flag"] and not r["whale_pump"]:
-            sig_chips += f'<span class="sig-chip sig-whale" title="Whale accumulation score {r["whale"]:.0f} — manos fuertes acumulando">ACCUM</span>'
         if r["spot_led"]:
             sig_chips += '<span class="sig-chip sig-spot" title="Volumen spot ≥ volumen perp — compra real, no apalancada">SPOT-LED</span>'
         if r["oi_surge"]:
@@ -560,8 +551,6 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
                 "VOLUME_SURGE": "et-vol",
                 "SQUEEZE_SETUP": "et-squeeze",
                 "SQUEEZE_IGNITION": "et-ignition",
-                "WHALE_ACCUM": "et-whale",
-                "WHALE_PUMP": "et-pump",
             }.get(et, "et-pre")
             last_event_cell = (
                 f'<span class="event-type-badge {et_cls}">{esc(et)}</span>'
@@ -577,7 +566,6 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
             <td style="color:{score_color(r["bull"])}">{r["bull"]:.0f}</td>
             <td style="color:#f85149">{r["risk"]:.0f}</td>
             <td style="color:{score_color(r["squeeze"])}">{r["squeeze"]:.0f}</td>
-            <td style="color:{score_color(r["whale"])}">{r["whale"]:.0f}</td>
             <td style="color:{oi3_color}">{r["oi_3bar"]*100:+.1f}%</td>
             <td>{r["vol_3bar"]:.1f}x</td>
             <td><span class="badge {funding_badge_class(r["funding"])}">{esc(r["funding"])}</span></td>
@@ -594,7 +582,7 @@ def make_events_slide(events: list[dict], scan: dict[str, dict],
           <h3 class="section-label">Watchlist — click symbol to navigate · {signal_count} signal(s) · {squeeze_count} squeeze(s) · {surge_count} surge(s) · {len(latest_event)} symbols with recent events</h3>
           <table class="overview-table">
             <thead>
-              <tr><th>Symbol</th><th>Price</th><th>Chg</th><th>Bull</th><th>Risk</th><th title="Squeeze setup score — shorts atrapados">Sqz</th><th title="Whale accumulation score — manos fuertes acumulando">Whl</th><th>OI&nbsp;3b</th><th>Vol&nbsp;3b</th><th>Funding</th><th title="Prima del perpetuo (premium index)">Basis</th><th>L/S</th><th>Signals</th><th>Last&nbsp;event</th></tr>
+              <tr><th>Symbol</th><th>Price</th><th>Chg</th><th>Bull</th><th>Risk</th><th title="Squeeze setup score — shorts atrapados">Sqz</th><th>OI&nbsp;3b</th><th>Vol&nbsp;3b</th><th>Funding</th><th title="Prima del perpetuo (premium index)">Basis</th><th>L/S</th><th>Signals</th><th>Last&nbsp;event</th></tr>
             </thead>
             <tbody>{overview_rows_html}</tbody>
           </table>
@@ -885,8 +873,6 @@ html, body {
 .et-vol   { background: #2a1a4b; color: #d2a8ff; }
 .et-squeeze { background: #3b1d2e; color: #f778ba; }
 .et-ignition { background: #f85149; color: #0d1117; }
-.et-whale { background: #102a3d; color: #58a6ff; }
-.et-pump  { background: #4b1113; color: #ff7b72; }
 .et-pre   { background: #1a1f29; color: #79c0ff; }
 
 /* ── Overview table ── */
@@ -900,8 +886,6 @@ html, body {
 .sig-oi    { background: #1a2f4b; color: #79c0ff; }
 .sig-vol   { background: #2a1a4b; color: #d2a8ff; }
 .sig-squeeze { background: #3b1d2e; color: #f778ba; }
-.sig-whale { background: #102a3d; color: #58a6ff; }
-.sig-pump  { background: #4b1113; color: #ff7b72; }
 .sig-ignition { background: #f85149; color: #0d1117; }
 .sig-spot  { background: #1f2a1a; color: #9ece6a; }
 .last-event-cell { white-space: nowrap; }
@@ -1574,8 +1558,9 @@ STATIC_JS = r"""
             callbacks: {
               label: (ctx) => {
                 const r = ctx.raw;
+                if (ctx.dataset.label === 'PUMP_ALERT') return '▲ PUMP_ALERT';
                 if (ctx.dataset.type === 'line' && ctx.dataset.label) {
-                  return ctx.dataset.label + ' ' + (+r.y).toFixed(0) + (r.pump ? ' · PUMP' : (r.accum ? ' · ACCUM' : ''));
+                  return ctx.dataset.label + ' ' + (+r.y).toFixed(0);
                 }
                 const f = (v) => v >= 1000
                   ? (+v).toLocaleString('en', { maximumFractionDigits: 0 })
@@ -1793,42 +1778,45 @@ STATIC_JS = r"""
       priceChart.update('none');
     }
 
-    // Whale-accumulation score (0-100) line on the OI pane. Only drawn on
-    // candles where a whale signal is active (ACCUM = blue, WHALE PUMP = violet);
-    // candles with no signal are gaps, not a baseline.
-    const isTrue = v => v === true || v === 'True' || v === 'true' || v === 1;
-    const whalePoints = raw.map(d => {
-      const accum = isTrue(d.whale_accum_flag);
-      const pump  = isTrue(d.whale_pump_flag);
-      const score = +d.whale_accum_score;
-      return { x: Date.parse(d.timestamp), y: (accum || pump) && Number.isFinite(score) ? score : null, accum, pump };
-    });
-    if (oiChart && whalePoints.some(p => p.y !== null)) {
-      const whaleColor = pt => (pt && pt.pump) ? '#a371f7' : '#58a6ff';
-      oiChart.options.scales.y2 = {
-        display: true, position: 'left', min: 0, max: 100,
-        ticks: { color: '#6e7681', font: { size: 7 }, maxTicksLimit: 3 },
-        grid: { display: false },
-      };
-      oiChart.data.datasets.push({
-        type: 'line',
-        label: 'ACCUM',
-        data: whalePoints,
-        borderColor: '#58a6ff',
-        segment: { borderColor: ctx => whaleColor(ctx.p1 && ctx.p1.raw) },
-        backgroundColor: 'transparent',
-        borderWidth: 1.75,
-        spanGaps: false,
-        pointRadius: ctx => (ctx.raw && ctx.raw.y != null) ? 1.6 : 0,
-        pointBackgroundColor: ctx => whaleColor(ctx.raw),
-        pointBorderColor: ctx => whaleColor(ctx.raw),
-        tension: 0.2,
-        order: 0,
-        yAxisID: 'y2',
-      });
-      const oiLabel = slideEl.querySelector('[data-ind="oi"] .chart-label .cl-text');
-      if (oiLabel) oiLabel.textContent = 'Open Interest · ACCUM (line)';
-      oiChart.update('none');
+    // ── PROTOTIPO · PUMP_ALERT (alerta composite OI+volumen, en evaluación) ──
+    // Vela verde con impulso ≥2% + volumen ≥2.5× su mediana(50) + OI 3 velas ≥2%.
+    // Definición validada en docs/report.html §5. Sólo se evalúa en 4h (su tf) y se
+    // calcula en el cliente sobre datos crudos; en producción iría como evento en el scanner.
+    if (tf === '4h' && priceChart) {
+      const A = raw.map(d => ({
+        x: Date.parse(d.timestamp), o: +d.open, h: +d.high, l: +d.low, c: +d.close,
+        v: +(d.volume || 0), oi: +(d.open_interest || 0),
+      }));
+      const marks = [];
+      for (let i = 3; i < A.length; i++) {
+        const p = A[i], prev = A[i - 1], p3 = A[i - 3];
+        if (!(p.c > 0 && prev.c > 0 && p.oi > 0 && p3.oi > 0)) continue;
+        const ret = p.c / prev.c - 1;
+        const oi3 = p.oi / p3.oi - 1;
+        const w = A.slice(Math.max(0, i - 50), i).map(q => q.v).filter(v => v > 0).sort((a, b) => a - b);
+        const med = w.length >= 30 ? w[Math.floor(w.length / 2)] : NaN;
+        const volRatio = med > 0 ? p.v / med : NaN;
+        if (p.c > p.o && ret >= 0.02 && volRatio >= 2.5 && oi3 >= 0.02) {
+          marks.push({ x: p.x, y: p.l, o: p.o, h: p.h, l: p.l, c: p.c });
+        }
+      }
+      if (marks.length) {
+        priceChart.data.datasets.push({
+          type: 'scatter',
+          label: 'PUMP_ALERT',
+          data: marks,
+          pointStyle: 'triangle',
+          radius: 7, pointRadius: 7, hoverRadius: 9,
+          backgroundColor: '#f0b72f',
+          borderColor: '#0d1117',
+          borderWidth: 1,
+          yAxisID: 'y',
+          order: -1,
+        });
+        const priceLabel = slideEl.querySelector('[data-ind="price"] .chart-label .cl-text');
+        if (priceLabel) priceLabel.textContent = 'Price · ▲ PUMP_ALERT (prototipo)';
+        priceChart.update('none');
+      }
     }
 
     slideEl._charts = { price: priceChart, oi: oiChart, vol: volChart, fr: frChart };
@@ -1843,7 +1831,7 @@ STATIC_JS = r"""
   // ── Indicator info popovers ("i" next to each panel label) ───────────────
   const INDICATOR_INFO = {
     price: 'Velas de precio (OHLC). Si hay datos de posicionamiento, se superpone el ratio long/short de cuentas como líneas sobre el precio.',
-    oi: 'Interés abierto: número de contratos vivos (velas/línea). OI subiendo con el precio plano o cayendo = posiciones acumulándose sin que el precio escape. · Whale indicator: cuando hay señal se superpone una línea con el score 0-100 (eje izquierdo) que mide cuánto acumulan las manos fuertes. Azul = ACCUM (acumulación: build de OI + top traders largos + retail aún fuera). Violeta = WHALE PUMP (la acumulación se dispara: vela verde con volumen y retail entrando). Cuanto más alto el nivel, más fuerte la señal; si no hay señal la línea no se dibuja.',
+    oi: 'Interés abierto: número de contratos vivos (velas/línea). OI subiendo con el precio plano o cayendo = posiciones acumulándose sin que el precio escape.',
     vol: 'Volumen por vela (barras). En símbolos servidos por Binance se superpone el CVD (delta acumulado de taker buy − sell) como línea: pendiente al alza = compra agresiva dominante.',
     fr: 'Barras = funding rate (amarillo ≥0: los longs pagan a los shorts; rojo <0: los shorts pagan a los longs). Línea azul = basis: la prima del perpetuo frente al spot (premium index) en bps — >0 perp caro / longs masificados, <0 descuento.',
   };
