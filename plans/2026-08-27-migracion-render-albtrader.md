@@ -58,11 +58,13 @@ Nada de lo que sigue tiene sentido hasta saber **qué alcanza la IP de Render
 Frankfurt**. El 403/451 de arriba es de una IP estadounidense; Frankfurt es otro
 país y otro rango, y Bybit y Binance sí operan en la UE. Puede salir bien.
 
-- [ ] Ruta temporal `GET /api/crypto/diagnostico-red` en albtrader, con
-      `requires_admin`, que pida en serie Bybit kline + Bybit OI + Binance
-      klines + Binance OI + OKX candles + OKX OI history + Coinalyze
-      `/exchanges` y devuelva código HTTP y primeros bytes de cada uno.
-      Sin dependencias nuevas: `requests` ya está en `requirements-web.txt`.
+- [x] Ruta temporal `GET /api/crypto/diagnostico-red` en albtrader, con
+      `requires_admin`. **Hecha** (27-ago-2026, `web_app/api/crypto_diag_routes.py`
+      + `test/test_crypto_diag_routes.py`, 20 tests en verde). Cubre 19 sondas:
+      las del pump detector y las del report de ciclos, filtrables por
+      `?grupo=` y `?clave=`. Devuelve código, latencia, muestra y veredicto, y
+      traduce el resultado al camino A/B/C de la tabla de abajo. Sin
+      dependencias nuevas. Corre entera en ~30 s desde una IP cloud.
 - [ ] Correrla en producción y **anotar el resultado en este fichero**.
 - [ ] Repetirla a las 24 h: un bloqueo geográfico puede aparecer después.
 
