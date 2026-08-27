@@ -65,14 +65,21 @@ país y otro rango, y Bybit y Binance sí operan en la UE. Puede salir bien.
       `?grupo=` y `?clave=`. Devuelve código, latencia, muestra y veredicto, y
       traduce el resultado al camino A/B/C de la tabla de abajo. Sin
       dependencias nuevas. Corre entera en ~30 s desde una IP cloud.
-- [ ] Correrla en producción y **anotar el resultado en este fichero**.
+- [x] Correrla en producción y **anotar el resultado en este fichero**.
+      **Hecho el 27-ago-2026 a las 20:40 UTC: camino A.** 18 sondas `ok` y una
+      `alcanzable` (Coinalyze, solo le falta la key). Responden Bybit (velas, OI
+      y funding), Binance USDT-M (velas, OI, funding) y Binance spot, que es
+      justo lo que el 403/451 desde una IP estadounidense hacía temer. También
+      responden las seis fuentes del report de ciclos. La pasada entera tardó
+      **4,8 s** — desde una IP cloud de EE.UU. tardaba 30 s, así que Frankfurt
+      no solo llega: llega cerca (~250 ms por llamada).
 - [ ] Repetirla a las 24 h: un bloqueo geográfico puede aparecer después.
 
 Y según lo que salga:
 
 | Resultado | Camino |
 |---|---|
-| Bybit y Binance responden | **Camino A**: el scanner se mueve tal cual, sin tocar `data_clients.py`. Es el caso bueno. |
+| Bybit y Binance responden | **Camino A**: el scanner se mueve tal cual, sin tocar `data_clients.py`. Es el caso bueno. ← **es el que salió** |
 | Solo OKX (y Coinalyze) responden | **Camino B**: añadir proveedor OKX a `data_clients.py` y mapear el watchlist. Trabajo real, pero el fallback por proveedor ya existe. |
 | Ni OKX responde | **Camino C**: el scan se queda en local y Render solo publica y avisa. Es el plan de retirada, no el objetivo. |
 
@@ -220,5 +227,12 @@ patrón que el repo ya conoce.
 
 - Vendorizar `pump_detector` o instalarlo desde git.
 - Si `/crypto` sirve el HTML entero o series por API — se decide midiendo.
-- Si el watchlist de 43 símbolos se queda como está. Con OKX (camino B) algunos
-  pares no existen con el mismo nombre y hay que mapearlos o soltarlos.
+- ~~Si el watchlist de 43 símbolos se queda como está.~~ **Resuelto por el
+  camino A**: Bybit y Binance responden, así que el watchlist se queda tal cual
+  y no hay que mapear nada ni escribir el proveedor OKX.
+
+Y una que abre el resultado: el diagnóstico prueba que **se llega**, no que
+quepa el scan entero. Son ~520 peticiones por pasada (43 símbolos × 2 marcos ×
+sus endpoints, más las de posicionamiento por símbolo); a los ~250 ms medidos
+salen ~2,5 min secuenciales, que cabe de sobra en una pasada horaria. Lo que
+falta por medir es el **límite de peticiones** de cada exchange y la **RAM**.
